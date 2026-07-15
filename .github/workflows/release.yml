@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build zip
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "$VERSION" > version.txt
+          zip -r AnalizIstorii.zip \
+            main.py lor_analyzer_tk.py paths.py config_store.py excel_io.py \
+            lor_analysis.py ksg_analysis.py updater.py version.txt requirements.txt \
+            README.md KSGoperacii.csv \
+            gui tests pytest.ini \
+            -x "*/__pycache__/*" "*.pyc"
+          shasum -a 256 AnalizIstorii.zip | awk '{print $1"  AnalizIstorii.zip"}' > AnalizIstorii.zip.sha256
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            AnalizIstorii.zip
+            AnalizIstorii.zip.sha256
+          generate_release_notes: true

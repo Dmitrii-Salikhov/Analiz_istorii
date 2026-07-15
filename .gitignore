@@ -1,0 +1,27 @@
+# Логи
+*.log
+update.log
+
+# Сборка
+dist/
+build/
+*.spec
+
+# Данные пациентов / локальные отчёты
+*.xlsx
+!tests/fixtures/*.xlsx
+
+# Локальный конфиг
+config.json
+
+# venv
+env/
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+.coverage
+.pytest_cache/
+.DS_Store
