@@ -1,6 +1,7 @@
 """Общие GUI-виджеты: скролл, прогресс, таблицы, drag-and-drop."""
 from __future__ import annotations
 
+import sys
 import threading
 import tkinter as tk
 from tkinter import font as tkfont
@@ -10,21 +11,69 @@ from typing import Callable, Iterable, Sequence
 import ttkbootstrap as ttkb
 
 
+def wheel_steps(event) -> int:
+    """Нормализует delta тачпада/мыши в шаги прокрутки (macOS / Win / Linux)."""
+    # Linux scrollbar buttons
+    num = getattr(event, "num", None)
+    if num == 4:
+        return -1
+    if num == 5:
+        return 1
+
+    delta = int(getattr(event, "delta", 0) or 0)
+    if delta == 0:
+        return 0
+
+    # Windows / часть Linux: кратно 120
+    if abs(delta) >= 120:
+        return int(-delta / 120)
+
+    # macOS trackpad: мелкие значения ±1..±N
+    if sys.platform == "darwin":
+        return -delta
+    return -1 if delta > 0 else 1
+
+
+def bind_mousewheel(widget, on_vertical: Callable, on_horizontal: Callable | None = None) -> None:
+    """Вешает прокрутку колёсиком/тачпадом на виджет (и Linux Button-4/5)."""
+
+    def _vertical(event):
+        steps = wheel_steps(event)
+        if steps:
+            on_vertical(steps)
+        return "break"
+
+    def _horizontal(event):
+        if on_horizontal is None:
+            return
+        steps = wheel_steps(event)
+        if steps:
+            on_horizontal(steps)
+        return "break"
+
+    widget.bind("<MouseWheel>", _vertical, add="+")
+    widget.bind("<Shift-MouseWheel>", _horizontal if on_horizontal else _vertical, add="+")
+    widget.bind("<Button-4>", _vertical, add="+")
+    widget.bind("<Button-5>", _vertical, add="+")
+    if on_horizontal is not None:
+        widget.bind("<Shift-Button-4>", lambda e: (on_horizontal(-1), "break")[1], add="+")
+        widget.bind("<Shift-Button-5>", lambda e: (on_horizontal(1), "break")[1], add="+")
+
+
 class ScrollableFrame(ttkb.Frame):
+    """Растягиваемый контейнер с вертикальной/горизонтальной прокруткой."""
+
     def __init__(self, parent, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
-        self.canvas = tk.Canvas(self, highlightthickness=0)
+        self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0)
         self.v_scrollbar = ttkb.Scrollbar(self, orient=tk.VERTICAL, command=self.canvas.yview)
         self.h_scrollbar = ttkb.Scrollbar(self, orient=tk.HORIZONTAL, command=self.canvas.xview)
         self.scrollable_frame = ttkb.Frame(self.canvas)
 
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")),
-        )
-        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self._window_id = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         self.canvas.configure(
-            yscrollcommand=self.v_scrollbar.set, xscrollcommand=self.h_scrollbar.set
+            yscrollcommand=self.v_scrollbar.set,
+            xscrollcommand=self.h_scrollbar.set,
         )
 
         self.canvas.grid(row=0, column=0, sticky="nsew")
@@ -32,6 +81,39 @@ class ScrollableFrame(ttkb.Frame):
         self.h_scrollbar.grid(row=1, column=0, sticky="ew")
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
+
+        self.scrollable_frame.bind("<Configure>", self._on_frame_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+
+        bind_mousewheel(
+            self.canvas,
+            lambda steps: self.canvas.yview_scroll(steps, "units"),
+            lambda steps: self.canvas.xview_scroll(steps, "units"),
+        )
+        bind_mousewheel(
+            self.scrollable_frame,
+            lambda steps: self.canvas.yview_scroll(steps, "units"),
+            lambda steps: self.canvas.xview_scroll(steps, "units"),
+        )
+
+    def _on_frame_configure(self, _event=None) -> None:
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event) -> None:
+        # Растягиваем внутренний фрейм по ширине холста при ресайзе окна
+        bbox = self.canvas.bbox("all")
+        content_width = bbox[2] - bbox[0] if bbox else 0
+        width = max(event.width, content_width)
+        self.canvas.itemconfigure(self._window_id, width=width)
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def scroll_y(self, steps: int) -> None:
+        if steps:
+            self.canvas.yview_scroll(steps, "units")
+
+    def scroll_x(self, steps: int) -> None:
+        if steps:
+            self.canvas.xview_scroll(steps, "units")
 
 
 class ProgressDialog(tk.Toplevel):
@@ -113,7 +195,7 @@ def make_filtered_tree(
     tree_frame = ttkb.Frame(frame)
     tree_frame.pack(fill=tk.BOTH, expand=True)
 
-    tree = ttkb.Treeview(tree_frame, columns=columns, show="headings", height=15)
+    tree = ttkb.Treeview(tree_frame, columns=columns, show="headings")
     tree_h_scroll = ttkb.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=tree.xview)
     tree_v_scroll = ttkb.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
     tree.configure(yscrollcommand=tree_v_scroll.set, xscrollcommand=tree_h_scroll.set)
@@ -131,7 +213,7 @@ def make_filtered_tree(
         for row in data:
             max_width = max(max_width, font.measure(str(row[col_idx])) + 20)
         tree.heading(col, text=header_text)
-        tree.column(col, width=min(max_width, 500))
+        tree.column(col, width=min(max_width, 500), stretch=True)
 
     for row in data:
         tree.insert("", tk.END, values=row)
@@ -147,11 +229,11 @@ def make_filtered_tree(
 
     filter_var.trace_add("write", update_filter)
 
-    def on_tree_mousewheel(event):
-        tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        return "break"
-
-    tree.bind("<MouseWheel>", on_tree_mousewheel)
+    bind_mousewheel(
+        tree,
+        lambda steps: tree.yview_scroll(steps, "units"),
+        lambda steps: tree.xview_scroll(steps, "units"),
+    )
 
     def copy_selection():
         selected = tree.selection()

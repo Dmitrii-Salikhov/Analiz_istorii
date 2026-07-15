@@ -1,6 +1,12 @@
 import pandas as pd
 
-from ksg_analysis import analyze_ksg, build_default_reference, build_month_comparison
+from ksg_analysis import (
+    analyze_ksg,
+    build_default_reference,
+    build_month_comparison,
+    ksg_period_sort_key,
+    sort_ksg_files_chronologically,
+)
 
 
 def _ksg_row(**overrides):
@@ -52,7 +58,6 @@ def test_kslp_child_requires_nonzero():
         "kslp_senior_age": 75,
         "kslp_operations_codes": ["A16.08.017.001", "A16.08.013.001", "A16.08.010.003"],
     }
-    # age ~3 years at admission 2026
     df = pd.DataFrame(
         [
             _ksg_row(
@@ -68,26 +73,43 @@ def test_kslp_child_requires_nonzero():
     assert result["total_kslp_issues"] >= 1
 
 
-def test_build_month_comparison():
+def test_ksg_period_sort_from_name():
+    assert ksg_period_sort_key(None, "КСГ за май 2026.xlsx")[:2] == (2026, 5)
+    assert ksg_period_sort_key(None, "Ксг за июнь.xlsx")[1] == 6
+
+
+def test_sort_ksg_files_chronologically():
+    files = [
+        {"name": "июнь.xlsx", "df": None, "results": {}},
+        {"name": "май 2026.xlsx", "df": None, "results": {}},
+        {"name": "апрель 2026.xlsx", "df": None, "results": {}},
+    ]
+    ordered = sort_ksg_files_chronologically(files)
+    assert [f["name"] for f in ordered] == ["апрель 2026.xlsx", "май 2026.xlsx", "июнь.xlsx"]
+
+
+def test_build_month_comparison_sorts_ascending():
     fake = [
         {
-            "name": "май.xlsx",
-            "results": {
-                "total_patients": 10,
-                "total_sum": 100.0,
-                "avg_kz_total": 1.1,
-                "total_kslp_issues": 2,
-                "doctor_sums": pd.DataFrame({"Врач": ["А"], "Сумма к оплате": [100.0]}),
-            },
-        },
-        {
             "name": "июнь.xlsx",
+            "df": None,
             "results": {
                 "total_patients": 12,
                 "total_sum": 150.0,
                 "avg_kz_total": 1.2,
                 "total_kslp_issues": 1,
                 "doctor_sums": pd.DataFrame({"Врач": ["А", "Б"], "Сумма к оплате": [50.0, 100.0]}),
+            },
+        },
+        {
+            "name": "май.xlsx",
+            "df": None,
+            "results": {
+                "total_patients": 10,
+                "total_sum": 100.0,
+                "avg_kz_total": 1.1,
+                "total_kslp_issues": 2,
+                "doctor_sums": pd.DataFrame({"Врач": ["А"], "Сумма к оплате": [100.0]}),
             },
         },
     ]

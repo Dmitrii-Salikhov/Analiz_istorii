@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 import pandas as pd
@@ -21,6 +22,39 @@ def format_doctor_name(full_name) -> str:
     if initials:
         return f"{last} {' '.join(initials)}"
     return last
+
+
+def extract_discharge_period(df: pd.DataFrame) -> tuple[date | None, date | None]:
+    """Период по дате выписки из стационара."""
+    col = "Дата выписки из стационара"
+    if col not in df.columns or df.empty:
+        return None, None
+    dates = pd.to_datetime(df[col], dayfirst=True, errors="coerce").dropna()
+    if dates.empty:
+        return None, None
+    return dates.min().date(), dates.max().date()
+
+
+def emk_report_basename(period_start: date | None, period_end: date | None) -> str:
+    if period_start and period_end:
+        return (
+            "Отчет анализа ЭМК за период с "
+            f"{period_start.strftime('%d.%m.%Y')} по {period_end.strftime('%d.%m.%Y')}"
+        )
+    return "Отчет анализа ЭМК"
+
+
+def violation_share_table(violations_df: pd.DataFrame) -> pd.DataFrame:
+    """Таблица: тип нарушения → количество и доля % от всех нарушений."""
+    if violations_df is None or violations_df.empty:
+        return pd.DataFrame(columns=["Тип нарушения", "Количество", "Доля, %"])
+    counts = violations_df["тип_нарушения"].value_counts()
+    total = int(counts.sum())
+    rows = []
+    for tip, cnt in counts.items():
+        share = round(100.0 * cnt / total, 1) if total else 0.0
+        rows.append({"Тип нарушения": tip, "Количество": int(cnt), "Доля, %": share})
+    return pd.DataFrame(rows)
 
 
 def _has_ids(doc_str) -> bool:
@@ -100,6 +134,8 @@ class LorAnalysisResult:
     ids_stats: pd.DataFrame
     long_stay: pd.DataFrame
     df: pd.DataFrame
+    period_start: date | None = None
+    period_end: date | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -113,11 +149,14 @@ class LorAnalysisResult:
             "ids_stats": self.ids_stats,
             "long_stay": self.long_stay,
             "df": self.df,
+            "period_start": self.period_start,
+            "period_end": self.period_end,
         }
 
 
 def analyze_lor(df: pd.DataFrame) -> LorAnalysisResult:
     prepared = prepare_lor_dataframe(df)
+    period_start, period_end = extract_discharge_period(prepared)
     total = len(prepared)
     empty_viol = pd.DataFrame(
         columns=["КВС", "возраст", "тип госпитализации", "врач", "тип_нарушения", "нарушение"]
@@ -134,6 +173,8 @@ def analyze_lor(df: pd.DataFrame) -> LorAnalysisResult:
             ids_stats=pd.DataFrame(columns=["врач", "нарушения по ИДС"]),
             long_stay=prepared.iloc[0:0],
             df=prepared,
+            period_start=period_start,
+            period_end=period_end,
         )
 
     avg_beddays = float(prepared["Койко-дни_скор"].sum() / total)
@@ -274,4 +315,6 @@ def analyze_lor(df: pd.DataFrame) -> LorAnalysisResult:
         ids_stats=ids_stats,
         long_stay=long_stay,
         df=prepared,
+        period_start=period_start,
+        period_end=period_end,
     )

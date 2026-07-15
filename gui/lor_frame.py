@@ -20,8 +20,16 @@ from excel_io import (
     load_lor_excel,
     pick_default_department,
 )
+from gui.helpers import auto_adjust_excel_columns, offer_open_folder
 from gui.widgets import ScrollableFrame, enable_file_drop, make_filtered_tree, run_with_progress
-from lor_analysis import LorAnalysisResult, analyze_lor, filter_by_department, format_doctor_name
+from lor_analysis import (
+    LorAnalysisResult,
+    analyze_lor,
+    emk_report_basename,
+    filter_by_department,
+    format_doctor_name,
+    violation_share_table,
+)
 
 
 class LorReportFrame(ttkb.Frame):
@@ -73,29 +81,6 @@ class LorReportFrame(ttkb.Frame):
         self.status_label = ttkb.Label(top_frame, text="Файл не загружен", bootstyle="secondary")
         self.status_label.pack(side=tk.RIGHT, padx=8)
 
-        self.scroll = ScrollableFrame(self)
-        self.scroll.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
-        self.notebook = ttkb.Notebook(self.scroll.scrollable_frame, bootstyle="primary")
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        self.main_tab = ttkb.Frame(self.notebook)
-        self.viol_main_tab = ttkb.Frame(self.notebook)
-        self.doctors_tab = ttkb.Frame(self.notebook)
-        self.export_tab = ttkb.Frame(self.notebook)
-
-        self.notebook.add(self.main_tab, text="📊 Основные показатели")
-        self.notebook.add(self.viol_main_tab, text="⚠️ Нарушения")
-        self.notebook.add(self.doctors_tab, text="👨‍⚕️ Сводка по врачам")
-        self.notebook.add(self.export_tab, text="📁 Экспорт отчёта")
-
-        self.viol_notebook = ttkb.Notebook(self.viol_main_tab, bootstyle="danger")
-        self.viol_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.viol_cat_tab = ttkb.Frame(self.viol_notebook)
-        self.viol_all_tab = ttkb.Frame(self.viol_notebook)
-        self.viol_notebook.add(self.viol_cat_tab, text="📂 По категориям")
-        self.viol_notebook.add(self.viol_all_tab, text="📋 Все нарушения")
-
         bottom_frame = ttkb.Frame(self)
         bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
         self.btn_save_txt = ttkb.Button(
@@ -114,6 +99,27 @@ class LorReportFrame(ttkb.Frame):
             bootstyle="warning",
         )
         self.btn_save_excel.pack(side=tk.LEFT, padx=5)
+
+        # Notebook заполняет всё доступное место при ресайзе окна
+        self.notebook = ttkb.Notebook(self, bootstyle="primary")
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        self.main_tab = ttkb.Frame(self.notebook)
+        self.viol_main_tab = ttkb.Frame(self.notebook)
+        self.doctors_tab = ttkb.Frame(self.notebook)
+        self.export_tab = ttkb.Frame(self.notebook)
+
+        self.notebook.add(self.main_tab, text="📊 Основные показатели")
+        self.notebook.add(self.viol_main_tab, text="⚠️ Нарушения")
+        self.notebook.add(self.doctors_tab, text="👨‍⚕️ Сводка по врачам")
+        self.notebook.add(self.export_tab, text="📁 Экспорт отчёта")
+
+        self.viol_notebook = ttkb.Notebook(self.viol_main_tab, bootstyle="danger")
+        self.viol_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.viol_cat_tab = ttkb.Frame(self.viol_notebook)
+        self.viol_all_tab = ttkb.Frame(self.viol_notebook)
+        self.viol_notebook.add(self.viol_cat_tab, text="📂 По категориям")
+        self.viol_notebook.add(self.viol_all_tab, text="📋 Все нарушения")
 
     def _on_dropped_files(self, paths: list[str]) -> None:
         if paths:
@@ -203,17 +209,35 @@ class LorReportFrame(ttkb.Frame):
         if not self.analysis:
             return
         r = self.analysis
-        main_frame = ttkb.Frame(self.main_tab)
+        scroll = ScrollableFrame(self.main_tab)
+        scroll.pack(fill=tk.BOTH, expand=True)
+        main_frame = ttkb.Frame(scroll.scrollable_frame)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        metrics_bar = ttkb.Frame(main_frame)
+        metrics_bar.pack(fill=tk.X, pady=(0, 4))
+        period_txt = ""
+        if r.period_start and r.period_end:
+            period_txt = (
+                f"Период: {r.period_start.strftime('%d.%m.%Y')} — "
+                f"{r.period_end.strftime('%d.%m.%Y')}"
+            )
+        ttkb.Label(metrics_bar, text=period_txt, bootstyle="secondary").pack(side=tk.LEFT)
+        ttkb.Button(
+            metrics_bar,
+            text="📋 Копировать показатели",
+            command=self._copy_main_metrics,
+            bootstyle="info",
+        ).pack(side=tk.RIGHT)
 
         metrics_frame = ttkb.Frame(main_frame)
         metrics_frame.pack(fill=tk.X, pady=5)
         for i, (label, value) in enumerate(
             [
-                ("👥 Всего пациентов", r.total_patients),
+                ("👥 Всего пациентов", str(r.total_patients)),
                 ("📅 Средний койко-день", f"{r.avg_beddays:.2f}"),
-                ("🚑 Экстренные госпитализации", r.urgent),
-                ("📋 Плановые госпитализации", r.planned),
+                ("🚑 Экстренные госпитализации", str(r.urgent)),
+                ("📋 Плановые госпитализации", str(r.planned)),
             ]
         ):
             card = ttkb.Frame(metrics_frame, bootstyle="light", padding=10)
@@ -222,37 +246,75 @@ class LorReportFrame(ttkb.Frame):
             ttkb.Label(card, text=value, font=("Calibri", 24, "bold"), bootstyle="warning").pack()
             metrics_frame.columnconfigure(i, weight=1)
 
-        age_main_frame = ttkb.Frame(main_frame)
-        age_main_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        age_frame = ttkb.Labelframe(
-            age_main_frame, text="📊 Распределение по возрастным группам", padding=10
-        )
-        age_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        chart_row = ttkb.Frame(main_frame)
+        chart_row.pack(fill=tk.BOTH, expand=True, pady=10)
 
-        columns = ("Группа", "Количество")
-        headings = {"Группа": "Возрастная группа", "Количество": "Количество пациентов"}
-        data = [(grp, cnt) for grp, cnt in r.age_dist.items()]
-        make_filtered_tree(age_frame, columns, data, headings, clipboard_host=self)
+        share_df = violation_share_table(r.violations_df)
+        share_frame = ttkb.Labelframe(chart_row, text="📊 Структура нарушений", padding=10)
+        share_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        if share_df.empty:
+            ttkb.Label(
+                share_frame, text="Нарушений нет", font=("Calibri", 13), bootstyle="success"
+            ).pack(pady=20)
+        else:
+            columns = ("Тип нарушения", "Количество", "Доля, %")
+            data = [tuple(row) for row in share_df.to_numpy()]
+            make_filtered_tree(
+                share_frame,
+                columns,
+                data,
+                {c: c for c in columns},
+                clipboard_host=self,
+                copy_df=share_df,
+                on_copy_df=self._copy_df,
+            )
 
-        fig = Figure(figsize=(4, 3), dpi=100)
+        graph_frame = ttkb.Frame(chart_row)
+        graph_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10)
+        fig = Figure(figsize=(5, 3.8), dpi=100)
         ax = fig.add_subplot(111)
-        groups = r.age_dist.index.tolist()
-        counts = r.age_dist.values.tolist()
-        ax.bar(groups, counts, color="#8DB4E2")
-        ax.set_title("Возрастные группы", fontsize=12)
-        ax.set_ylabel("Пациентов")
-        ax.tick_params(axis="x", rotation=30)
+        if share_df.empty:
+            ax.text(0.5, 0.5, "Нет нарушений", ha="center", va="center")
+            ax.axis("off")
+        else:
+            labels = share_df["Тип нарушения"].tolist()
+            shares = share_df["Доля, %"].tolist()
+            bars = ax.bar(range(len(labels)), shares, color="#5B9BD5")
+            ax.set_xticks(range(len(labels)))
+            ax.set_xticklabels(labels, rotation=25, ha="right", fontsize=8)
+            ax.set_ylabel("Доля, %")
+            ax.set_title("Доля нарушений по типам", fontsize=12)
+            ax.set_ylim(0, max(shares) * 1.15 if shares else 1)
+            for bar, val in zip(bars, shares):
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height(),
+                    f"{val}%",
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                )
         fig.tight_layout()
-        canvas = FigureCanvasTkAgg(fig, master=age_main_frame)
+        canvas = FigureCanvasTkAgg(fig, master=graph_frame)
         canvas.draw()
-        canvas.get_tk_widget().pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10)
-
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         ttkb.Button(
-            age_main_frame,
+            graph_frame,
             text="📷 Сохранить график",
             command=lambda: self._save_graph(fig),
             bootstyle="secondary",
-        ).pack(side=tk.BOTTOM, pady=5)
+        ).pack(pady=5)
+
+        age_frame = ttkb.Labelframe(main_frame, text="Возрастные группы", padding=8)
+        age_frame.pack(fill=tk.X, pady=6)
+        age_data = [(grp, cnt) for grp, cnt in r.age_dist.items()]
+        make_filtered_tree(
+            age_frame,
+            ("Группа", "Количество"),
+            age_data,
+            {"Группа": "Возрастная группа", "Количество": "Количество пациентов"},
+            clipboard_host=self,
+        )
 
         note_frame = ttkb.Labelframe(main_frame, text="📝 Аналитическая записка", padding=10)
         note_frame.pack(fill=tk.X, pady=10)
@@ -282,6 +344,50 @@ class LorReportFrame(ttkb.Frame):
             "Рекомендации: усилить контроль за оформлением ИДС, дневников и эпикризов.",
         )
         note_text.configure(state=tk.DISABLED)
+
+    def _copy_df(self, df: pd.DataFrame) -> None:
+        self.clipboard_clear()
+        self.clipboard_append(df.to_string(index=False))
+        messagebox.showinfo("Скопировано", "Таблица скопирована в буфер обмена")
+
+    def _copy_main_metrics(self) -> None:
+        if not self.analysis:
+            return
+        r = self.analysis
+        lines = [
+            "Основные показатели",
+            f"Отделение: {self.department_var.get()}",
+        ]
+        if r.period_start and r.period_end:
+            lines.append(
+                f"Период: {r.period_start.strftime('%d.%m.%Y')} — "
+                f"{r.period_end.strftime('%d.%m.%Y')}"
+            )
+        lines.extend(
+            [
+                f"Всего пациентов: {r.total_patients}",
+                f"Средний койко-день: {r.avg_beddays:.2f}",
+                f"Экстренные госпитализации: {r.urgent}",
+                f"Плановые госпитализации: {r.planned}",
+            ]
+        )
+        share_df = violation_share_table(r.violations_df)
+        if not share_df.empty:
+            lines.append("")
+            lines.append("Структура нарушений:")
+            for _, row in share_df.iterrows():
+                lines.append(
+                    f"  {row['Тип нарушения']}: {row['Количество']} ({row['Доля, %']}%)"
+                )
+        self.clipboard_clear()
+        self.clipboard_append("\n".join(lines))
+        messagebox.showinfo("Скопировано", "Основные показатели скопированы в буфер обмена")
+
+    def _default_report_path(self, extension: str) -> str:
+        r = self.analysis
+        start = r.period_start if r else None
+        end = r.period_end if r else None
+        return emk_report_basename(start, end) + extension
 
     def _create_violations_tabs(self) -> None:
         for w in self.viol_cat_tab.winfo_children():
@@ -418,6 +524,12 @@ class LorReportFrame(ttkb.Frame):
                     doctor_short = format_doctor_name(row["врач"])
                     age_str = f"{int(row['возраст'])}г" if pd.notna(row["возраст"]) else "?г"
                     lines.append(f"• {row['КВС']} ({age_str}) — {doctor_short}")
+            elif vtype == "Длительная госпитализация":
+                for _, row in group.iterrows():
+                    doctor_short = format_doctor_name(row["врач"])
+                    match = re.search(r"\((\d+)\)", str(row["нарушение"]))
+                    days = match.group(1) if match else "?"
+                    lines.append(f"• {row['КВС']} ({doctor_short}) — {days} дн.")
             else:
                 for _, row in group.iterrows():
                     doctor_short = format_doctor_name(row["врач"])
@@ -553,7 +665,9 @@ class LorReportFrame(ttkb.Frame):
             return
         r = self.analysis
         file_path = filedialog.asksaveasfilename(
-            defaultextension=".txt", filetypes=[("Text files", "*.txt")]
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt")],
+            initialfile=self._default_report_path(".txt"),
         )
         if not file_path:
             return
@@ -561,12 +675,26 @@ class LorReportFrame(ttkb.Frame):
             if self.export_sections["Метаданные"].get():
                 f.write(f"Отчёт сформирован: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n")
                 f.write(f"Исходный файл: {self.file_name}\n")
-                f.write(f"Отделение: {self.department_var.get()}\n\n")
+                f.write(f"Отделение: {self.department_var.get()}\n")
+                if r.period_start and r.period_end:
+                    f.write(
+                        f"Период: {r.period_start.strftime('%d.%m.%Y')} — "
+                        f"{r.period_end.strftime('%d.%m.%Y')}\n"
+                    )
+                f.write("\n")
             if self.export_sections["Основные показатели"].get():
                 f.write("ОСНОВНЫЕ ПОКАЗАТЕЛИ\n")
                 f.write(f"Всего пациентов: {r.total_patients}\n")
                 f.write(f"Средний койко-день: {r.avg_beddays:.2f}\n")
-                f.write(f"Экстренные: {r.urgent}, Плановые: {r.planned}\n\n")
+                f.write(f"Экстренные: {r.urgent}, Плановые: {r.planned}\n")
+                share_df = violation_share_table(r.violations_df)
+                if not share_df.empty:
+                    f.write("\nСтруктура нарушений:\n")
+                    for _, row in share_df.iterrows():
+                        f.write(
+                            f"  {row['Тип нарушения']}: {row['Количество']} ({row['Доля, %']}%)\n"
+                        )
+                f.write("\n")
             if self.export_sections["Возрастные группы"].get():
                 f.write("ВОЗРАСТНЫЕ ГРУППЫ\n")
                 for grp, cnt in r.age_dist.items():
@@ -588,10 +716,12 @@ class LorReportFrame(ttkb.Frame):
                     f.write(f"{row['врач']}: {row['нарушения по ИДС']} нарушений\n")
                 f.write("\n")
             if self.export_sections["Длительные госпитализации"].get() and not r.long_stay.empty:
-                f.write(
-                    f"Длительные госпитализации (>7 дней): {len(r.long_stay)} случаев (индикатор)\n"
-                )
-        messagebox.showinfo("Сохранено", f"Отчёт сохранён в {file_path}")
+                f.write(f"Длительные госпитализации (>7 дней): {len(r.long_stay)} случаев\n")
+                for _, row in r.long_stay.iterrows():
+                    doctor = format_doctor_name(row.get("Лечащий врач"))
+                    days = int(row.get("Койко-дни_скор", 0))
+                    f.write(f"  • {row['Номер КВС']} ({doctor}) — {days} дн.\n")
+        offer_open_folder(file_path)
 
     def save_report_excel(self) -> None:
         if not self.analysis:
@@ -599,23 +729,30 @@ class LorReportFrame(ttkb.Frame):
             return
         r = self.analysis
         file_path = filedialog.asksaveasfilename(
-            defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")]
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx")],
+            initialfile=self._default_report_path(".xlsx"),
         )
         if not file_path:
             return
         with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
             if self.export_sections["Метаданные"].get():
-                meta = pd.DataFrame(
-                    {
-                        "Параметр": ["Дата формирования", "Исходный файл", "Отделение"],
-                        "Значение": [
-                            datetime.now().strftime("%d.%m.%Y %H:%M"),
-                            self.file_name,
-                            self.department_var.get(),
-                        ],
-                    }
-                )
+                meta_rows = {
+                    "Параметр": ["Дата формирования", "Исходный файл", "Отделение"],
+                    "Значение": [
+                        datetime.now().strftime("%d.%m.%Y %H:%M"),
+                        self.file_name,
+                        self.department_var.get(),
+                    ],
+                }
+                if r.period_start and r.period_end:
+                    meta_rows["Параметр"].append("Период")
+                    meta_rows["Значение"].append(
+                        f"{r.period_start.strftime('%d.%m.%Y')} — {r.period_end.strftime('%d.%m.%Y')}"
+                    )
+                meta = pd.DataFrame(meta_rows)
                 meta.to_excel(writer, sheet_name="Метаданные", index=False)
+                auto_adjust_excel_columns(writer, "Метаданные", meta)
             if self.export_sections["Основные показатели"].get():
                 summary = pd.DataFrame(
                     {
@@ -634,20 +771,30 @@ class LorReportFrame(ttkb.Frame):
                     }
                 )
                 summary.to_excel(writer, sheet_name="Основные показатели", index=False)
+                auto_adjust_excel_columns(writer, "Основные показатели", summary)
+                share_df = violation_share_table(r.violations_df)
+                if not share_df.empty:
+                    share_df.to_excel(writer, sheet_name="Структура нарушений", index=False)
+                    auto_adjust_excel_columns(writer, "Структура нарушений", share_df)
             if self.export_sections["Возрастные группы"].get():
                 age_df = r.age_dist.reset_index()
                 age_df.columns = ["Возрастная группа", "Количество"]
                 age_df.to_excel(writer, sheet_name="Возрастные группы", index=False)
+                auto_adjust_excel_columns(writer, "Возрастные группы", age_df)
             if self.export_sections["Нарушения (все)"].get():
                 r.violations_df.to_excel(writer, sheet_name="Нарушения", index=False)
+                auto_adjust_excel_columns(writer, "Нарушения", r.violations_df)
             if self.export_sections["Сводка по врачам"].get():
                 r.doctor_stats.to_excel(writer, sheet_name="Сводка по врачам", index=False)
+                auto_adjust_excel_columns(writer, "Сводка по врачам", r.doctor_stats)
             if self.export_sections["ИДС по врачам"].get() and not r.ids_stats.empty:
                 r.ids_stats.to_excel(writer, sheet_name="ИДС по врачам", index=False)
+                auto_adjust_excel_columns(writer, "ИДС по врачам", r.ids_stats)
             if self.export_sections["Длительные госпитализации"].get() and not r.long_stay.empty:
                 long_df = r.long_stay[
                     ["Номер КВС", "Возраст", "Койко-дни_скор", "Лечащий врач"]
                 ].copy()
                 long_df.columns = ["КВС", "Возраст", "Койко-дни", "Врач"]
                 long_df.to_excel(writer, sheet_name="Длительные госпитализации", index=False)
-        messagebox.showinfo("Сохранено", f"Отчёт сохранён в {file_path}")
+                auto_adjust_excel_columns(writer, "Длительные госпитализации", long_df)
+        offer_open_folder(file_path)

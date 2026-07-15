@@ -15,7 +15,7 @@ from config_store import load_config, save_config
 from gui.ksg_frame import KsgReportFrame
 from gui.lor_frame import LorReportFrame
 from gui.settings_dialog import SettingsDialog
-from gui.widgets import ScrollableFrame
+from gui.widgets import ScrollableFrame, wheel_steps
 from paths import get_base_dir
 from updater import check_for_updates, read_current_version
 
@@ -25,25 +25,48 @@ LOG_FILE = "errors.log"
 class App(ttkb.Window):
     def __init__(self):
         self.app_settings = load_config()
+        self.current_version = read_current_version()
         super().__init__(
             themename=self.app_settings.get("theme", "cosmo"),
-            title="Анализ работы отделения",
+            title=f"Анализ работы отделения — v{self.current_version}",
         )
         self.geometry(self.app_settings.get("window_geometry", "1400x850+100+100"))
+        self.minsize(960, 640)
+        self.resizable(True, True)
 
         style = ttkb.Style()
         style.configure("Treeview", rowheight=25)
 
+        header = ttkb.Frame(self)
+        header.pack(fill=tk.X, padx=10, pady=10)
+
         lbl_title = ttkb.Label(
-            self,
+            header,
             text="Анализ работы отделения",
             font=("Calibri", 20, "bold"),
             bootstyle="warning",
         )
-        lbl_title.pack(pady=10)
+        lbl_title.pack(side=tk.LEFT)
+
+        version_frame = ttkb.Frame(header)
+        version_frame.pack(side=tk.RIGHT)
+        self.version_var = tk.StringVar(value=f"Версия {self.current_version}")
+        ttkb.Label(
+            version_frame,
+            textvariable=self.version_var,
+            font=("Calibri", 12),
+            bootstyle="secondary",
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        ttkb.Button(
+            version_frame,
+            text="Проверить обновления",
+            command=self.check_updates,
+            bootstyle="info-outline",
+            padding=(10, 4),
+        ).pack(side=tk.LEFT)
 
         self.notebook = ttkb.Notebook(self, bootstyle="primary")
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 0))
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 0))
 
         self.lor_frame = LorReportFrame(self.notebook, self)
         self.ksg_frame = KsgReportFrame(self.notebook, self)
@@ -51,7 +74,9 @@ class App(ttkb.Window):
         self.notebook.add(self.lor_frame, text="📊 Анализ работы отделения")
         self.notebook.add(self.ksg_frame, text="💰 Анализ КСГ")
 
-        self.status_var = tk.StringVar(value=self.ksg_frame.reference_status)
+        self.status_var = tk.StringVar(
+            value=f"v{self.current_version}  |  {self.ksg_frame.reference_status}"
+        )
         status_bar = ttkb.Label(
             self, textvariable=self.status_var, bootstyle="secondary", anchor=tk.W
         )
@@ -59,7 +84,11 @@ class App(ttkb.Window):
 
         self._create_menu()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.bind_all("<MouseWheel>", self._global_mousewheel)
+        # Глобальная прокрутка: тачпад / мышь / Linux-кнопки
+        self.bind_all("<MouseWheel>", self._global_mousewheel, add="+")
+        self.bind_all("<Shift-MouseWheel>", self._global_shift_mousewheel, add="+")
+        self.bind_all("<Button-4>", self._global_mousewheel, add="+")
+        self.bind_all("<Button-5>", self._global_mousewheel, add="+")
 
         if self.app_settings.get("check_updates_on_start", True):
             repo = self.app_settings.get("github_repo", "")
@@ -180,10 +209,16 @@ class App(ttkb.Window):
         save_config(self.app_settings)
         self.destroy()
 
-    def _find_scrollable_frame(self, widget):
+    def _widget_under_pointer(self, event):
+        try:
+            return self.winfo_containing(event.x_root, event.y_root)
+        except tk.TclError:
+            return None
+
+    def _find_ancestor(self, widget, pred):
         parent = widget
         while parent is not None:
-            if isinstance(parent, ScrollableFrame):
+            if pred(parent):
                 return parent
             p = parent.winfo_parent()
             if not p:
@@ -194,10 +229,54 @@ class App(ttkb.Window):
                 break
         return None
 
-    def _global_mousewheel(self, event) -> None:
-        widget = event.widget.winfo_containing(event.x_root, event.y_root)
-        if widget is None:
-            return
-        sf = self._find_scrollable_frame(widget)
+    def _scroll_target_y(self, widget, steps: int) -> bool:
+        """Прокрутить ближайший подходящий виджет под курсором. True если скроллли."""
+        if widget is None or not steps:
+            return False
+
+        cls = widget.winfo_class()
+        # Нативные виджеты с собственной прокруткой
+        if cls in ("Treeview", "Text", "Listbox", "Canvas"):
+            try:
+                widget.yview_scroll(steps, "units")
+                return True
+            except tk.TclError:
+                pass
+
+        sf = self._find_ancestor(widget, lambda w: isinstance(w, ScrollableFrame))
         if sf is not None:
-            sf.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            sf.scroll_y(steps)
+            return True
+
+        # ttkbootstrap Notebook / Frame — ищем Canvas у ScrollableFrame выше
+        return False
+
+    def _scroll_target_x(self, widget, steps: int) -> bool:
+        if widget is None or not steps:
+            return False
+        cls = widget.winfo_class()
+        if cls in ("Treeview", "Text", "Listbox", "Canvas"):
+            try:
+                widget.xview_scroll(steps, "units")
+                return True
+            except tk.TclError:
+                pass
+        sf = self._find_ancestor(widget, lambda w: isinstance(w, ScrollableFrame))
+        if sf is not None:
+            sf.scroll_x(steps)
+            return True
+        return False
+
+    def _global_mousewheel(self, event) -> None:
+        steps = wheel_steps(event)
+        if not steps:
+            return
+        widget = self._widget_under_pointer(event)
+        self._scroll_target_y(widget, steps)
+
+    def _global_shift_mousewheel(self, event) -> None:
+        steps = wheel_steps(event)
+        if not steps:
+            return
+        widget = self._widget_under_pointer(event)
+        self._scroll_target_x(widget, steps)

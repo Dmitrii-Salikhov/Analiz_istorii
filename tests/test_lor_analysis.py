@@ -30,6 +30,24 @@ def test_format_doctor_name():
     assert format_doctor_name("") == "неизвестно"
 
 
+def test_emk_report_basename_and_shares():
+    from datetime import date
+
+    from lor_analysis import emk_report_basename, violation_share_table
+
+    assert "01.06.2026" in emk_report_basename(date(2026, 6, 1), date(2026, 6, 30))
+    assert emk_report_basename(None, None) == "Отчет анализа ЭМК"
+
+    viol = pd.DataFrame(
+        {
+            "тип_нарушения": ["ИДС", "ИДС", "Эпикриз"],
+        }
+    )
+    share = violation_share_table(viol)
+    assert list(share["Тип нарушения"]) == ["ИДС", "Эпикриз"]
+    assert share.loc[0, "Доля, %"] == 66.7
+
+
 def test_analyze_detects_ids_and_primary():
     df = pd.DataFrame(
         [

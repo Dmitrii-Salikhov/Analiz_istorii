@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -270,12 +271,59 @@ def analyze_ksg(
     }
 
 
+def ksg_period_sort_key(df: pd.DataFrame | None, name: str = "") -> tuple[int, int, int]:
+    """Ключ сортировки месяца: (год, месяц, день) по данным файла или имени."""
+    if df is not None and not df.empty:
+        date_col = "Поступление" if "Поступление" in df.columns else (
+            "Выписка" if "Выписка" in df.columns else None
+        )
+        if date_col:
+            dates = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce").dropna()
+            if not dates.empty:
+                mid = dates.min()
+                return int(mid.year), int(mid.month), int(mid.day)
+
+    lower = (name or "").lower()
+    year_match = re.search(r"(20\d{2})", lower)
+    year = int(year_match.group(1)) if year_match else 9999
+    month_map = [
+        (1, ("январ",)),
+        (2, ("феврал",)),
+        (3, ("март", "марте")),
+        (4, ("апрел",)),
+        (5, ("май", "мая", "мае")),
+        (6, ("июн",)),
+        (7, ("июл",)),
+        (8, ("август",)),
+        (9, ("сентябр",)),
+        (10, ("октябр",)),
+        (11, ("ноябр",)),
+        (12, ("декабр",)),
+    ]
+    month = 12
+    for num, aliases in month_map:
+        if any(a in lower for a in aliases):
+            month = num
+            break
+    return year, month, 1
+
+
+def sort_ksg_files_chronologically(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Сортирует загруженные КСГ-файлы по возрастанию периода."""
+    return sorted(
+        files,
+        key=lambda f: ksg_period_sort_key(f.get("df"), f.get("name", "")),
+    )
+
+
 def build_month_comparison(files: list[dict[str, Any]]) -> dict[str, Any]:
-    """Сводное сравнение нескольких загруженных КСГ-файлов (месяцев)."""
+    """Сводное сравнение нескольких загруженных КСГ-файлов (месяцев) по возрастанию."""
+    files = sort_ksg_files_chronologically(files)
     names = [f["name"] for f in files]
     results = [f["results"] for f in files]
     summary = {
         "names": names,
+        "files": files,
         "total_patients": [r["total_patients"] for r in results],
         "total_sum": [r["total_sum"] for r in results],
         "avg_kz": [r["avg_kz_total"] for r in results],

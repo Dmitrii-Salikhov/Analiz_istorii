@@ -16,7 +16,12 @@ from matplotlib.figure import Figure
 from config_store import save_config
 from excel_io import ExcelParseError, MissingColumnsError, load_ksg_excel
 from gui.widgets import ScrollableFrame, enable_file_drop, make_filtered_tree, run_with_progress
-from ksg_analysis import analyze_ksg, build_month_comparison, load_reference
+from ksg_analysis import (
+    analyze_ksg,
+    build_month_comparison,
+    load_reference,
+    sort_ksg_files_chronologically,
+)
 
 
 class KsgReportFrame(ttkb.Frame):
@@ -118,7 +123,8 @@ class KsgReportFrame(ttkb.Frame):
         def load_next():
             if not queue:
                 if self.loaded_files:
-                    self.active_file_index = len(self.loaded_files) - 1
+                    if not (0 <= self.active_file_index < len(self.loaded_files)):
+                        self.active_file_index = len(self.loaded_files) - 1
                     self._activate_file(self.active_file_index)
                 return
             fp = queue.pop(0)
@@ -132,6 +138,7 @@ class KsgReportFrame(ttkb.Frame):
                 self.loaded_files.append(
                     {"name": name, "path": fp, "df": df, "results": results}
                 )
+                self._sort_loaded_files(active_path=fp)
                 load_next()
 
             def on_error(exc: BaseException):
@@ -159,8 +166,8 @@ class KsgReportFrame(ttkb.Frame):
             self.loaded_files.append(
                 {"name": name, "path": file_path, "df": df, "results": results}
             )
+            self._sort_loaded_files(active_path=file_path)
             if self.loaded_files:
-                self.active_file_index = len(self.loaded_files) - 1
                 self._activate_file(self.active_file_index)
 
         def on_error(exc: BaseException):
@@ -171,6 +178,19 @@ class KsgReportFrame(ttkb.Frame):
                 messagebox.showerror("Ошибка", f"Не удалось загрузить файл:\n{file_path}\n{exc}")
 
         run_with_progress(self, "Загрузка КСГ", work, on_success, on_error)
+
+    def _sort_loaded_files(self, active_path: str | None = None) -> None:
+        """Держит загруженные месяцы в хронологическом порядке."""
+        if active_path is None and 0 <= self.active_file_index < len(self.loaded_files):
+            active_path = self.loaded_files[self.active_file_index]["path"]
+        self.loaded_files = sort_ksg_files_chronologically(self.loaded_files)
+        if active_path:
+            for i, f in enumerate(self.loaded_files):
+                if f["path"] == active_path:
+                    self.active_file_index = i
+                    break
+        elif self.loaded_files:
+            self.active_file_index = len(self.loaded_files) - 1
 
     def remove_file(self) -> None:
         idx = self.file_combobox.current()
@@ -324,7 +344,10 @@ class KsgReportFrame(ttkb.Frame):
         ).pack()
 
     def _tab_analysis(self) -> None:
-        frame = self.tab_frames["analysis"]
+        outer = self.tab_frames["analysis"]
+        scroll = ScrollableFrame(outer)
+        scroll.pack(fill=tk.BOTH, expand=True)
+        frame = scroll.scrollable_frame
         r = self.results
         settings = self.app.app_settings
         thresholds = r.get("thresholds", {})
@@ -570,10 +593,10 @@ class KsgReportFrame(ttkb.Frame):
         for w in self.compare_result_frame.scrollable_frame.winfo_children():
             w.destroy()
 
-        files = [self.loaded_files[i] for i in indices]
+        files = sort_ksg_files_chronologically([self.loaded_files[i] for i in indices])
         summary = build_month_comparison(files)
         names = summary["names"]
-        results = [f["results"] for f in files]
+        results = [f["results"] for f in summary.get("files", files)]
 
         total_patients_sum = sum(summary["total_patients"])
         total_sum_sum = sum(summary["total_sum"])

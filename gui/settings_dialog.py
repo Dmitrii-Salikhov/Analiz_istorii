@@ -7,6 +7,7 @@ from tkinter import messagebox
 import ttkbootstrap as ttkb
 
 from config_store import save_config
+from gui.widgets import ScrollableFrame
 
 THEME_CHOICES = (
     "cosmo",
@@ -30,14 +31,18 @@ class SettingsDialog(tk.Toplevel):
         super().__init__(parent)
         self.app = app
         self.title("Настройки")
-        self.geometry("520x620")
-        self.resizable(False, False)
+        self.geometry("560x640")
+        self.minsize(480, 420)
+        self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
 
         settings = app.app_settings
-        body = ttkb.Frame(self, padding=16)
+        scroll = ScrollableFrame(self)
+        scroll.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        body = ttkb.Frame(scroll.scrollable_frame, padding=16)
         body.pack(fill=tk.BOTH, expand=True)
+        body.columnconfigure(0, weight=1)
 
         row = 0
 
