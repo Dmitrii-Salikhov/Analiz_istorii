@@ -9,11 +9,12 @@ from typing import Any
 from paths import get_base_dir
 
 CONFIG_FILE = "config.json"
+RECENT_MAX = 5
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "window_geometry": "1400x850+100+100",
     "date_format": "dayfirst",
-    "theme": "cosmo",
+    "theme": "flatly",
     "ksg_threshold_low": 20000,
     "ksg_threshold_high": 100000,
     "kslp_age_min": 0,
@@ -27,6 +28,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "preferred_department": "Оториноларингологическое отделение",
     "github_repo": "Dmitrii-Salikhov/Analiz_istorii",
     "check_updates_on_start": True,
+    "recent_emk": [],
+    "recent_ksg": [],
 }
 
 
@@ -45,6 +48,8 @@ def load_config() -> dict[str, Any]:
                 cfg.update(loaded)
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass
+    cfg.setdefault("recent_emk", [])
+    cfg.setdefault("recent_ksg", [])
     return cfg
 
 
@@ -52,3 +57,14 @@ def save_config(config: dict[str, Any]) -> None:
     path = config_path()
     with path.open("w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
+
+
+def push_recent_file(config: dict[str, Any], key: str, file_path: str, limit: int = RECENT_MAX) -> None:
+    """Добавляет путь в начало списка недавних файлов."""
+    if key not in ("recent_emk", "recent_ksg"):
+        return
+    path = str(file_path)
+    items = [p for p in list(config.get(key) or []) if p and p != path]
+    items.insert(0, path)
+    config[key] = items[:limit]
+    save_config(config)

@@ -173,6 +173,8 @@ def make_filtered_tree(
     clipboard_host=None,
     copy_df=None,
     on_copy_df: Callable | None = None,
+    tag_column_index: int | None = None,
+    tag_colors: dict[str, str] | None = None,
 ):
     frame = ttkb.Frame(parent)
     frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -205,6 +207,10 @@ def make_filtered_tree(
     tree_frame.grid_rowconfigure(0, weight=1)
     tree_frame.grid_columnconfigure(0, weight=1)
 
+    if tag_colors:
+        for tag_name, color in tag_colors.items():
+            tree.tag_configure(tag_name, background=color)
+
     font = tkfont.Font()
     for col in columns:
         header_text = headings.get(col, col)
@@ -215,17 +221,28 @@ def make_filtered_tree(
         tree.heading(col, text=header_text)
         tree.column(col, width=min(max_width, 500), stretch=True)
 
-    for row in data:
-        tree.insert("", tk.END, values=row)
+    def _insert_rows(rows):
+        for row in rows:
+            tags = ()
+            if tag_column_index is not None and tag_column_index < len(row):
+                tag = str(row[tag_column_index])
+                if tag_colors and tag in tag_colors:
+                    tags = (tag,)
+            tree.insert("", tk.END, values=row, tags=tags)
+
+    _insert_rows(data)
 
     def update_filter(*_args):
         search_text = filter_var.get().lower()
         if search_text in ("поиск...", "🔍 поиск..."):
             search_text = ""
         tree.delete(*tree.get_children())
-        for row in data:
-            if search_text in " ".join(str(x).lower() for x in row):
-                tree.insert("", tk.END, values=row)
+        filtered = [
+            row
+            for row in data
+            if search_text in " ".join(str(x).lower() for x in row)
+        ]
+        _insert_rows(filtered)
 
     filter_var.trace_add("write", update_filter)
 

@@ -13,6 +13,7 @@ import ttkbootstrap as ttkb
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
+from config_store import push_recent_file
 from excel_io import (
     ExcelParseError,
     MissingColumnsError,
@@ -20,7 +21,8 @@ from excel_io import (
     load_lor_excel,
     pick_default_department,
 )
-from gui.helpers import auto_adjust_excel_columns, offer_open_folder
+from gui.helpers import auto_adjust_excel_columns, build_empty_state, offer_open_folder
+from gui.ui_theme import VIOLATION_TREE_TAGS, chart_color_for_violation
 from gui.widgets import ScrollableFrame, enable_file_drop, make_filtered_tree, run_with_progress
 from lor_analysis import (
     LorAnalysisResult,
@@ -61,7 +63,7 @@ class LorReportFrame(ttkb.Frame):
 
         self.btn_load = ttkb.Button(
             top_frame,
-            text="📂 Загрузить Excel-файл",
+            text="Загрузить Excel-файл",
             command=self.load_file,
             bootstyle="info",
             padding=(20, 5),
@@ -78,48 +80,92 @@ class LorReportFrame(ttkb.Frame):
         self.dept_combo.pack(side=tk.LEFT, padx=4)
         self.dept_combo.bind("<<ComboboxSelected>>", self._on_department_changed)
 
-        self.status_label = ttkb.Label(top_frame, text="Файл не загружен", bootstyle="secondary")
-        self.status_label.pack(side=tk.RIGHT, padx=8)
+        self.context_frame = ttkb.Frame(self, bootstyle="secondary", padding=(8, 4))
+        self.context_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 4))
+
+        self.lbl_context_file = ttkb.Label(self.context_frame, text="Файл: —", font=("Calibri", 10))
+        self.lbl_context_file.pack(side=tk.LEFT, padx=(0, 16))
+        self.lbl_context_period = ttkb.Label(self.context_frame, text="Период: —", font=("Calibri", 10))
+        self.lbl_context_period.pack(side=tk.LEFT, padx=(0, 16))
+        self.lbl_context_dept = ttkb.Label(self.context_frame, text="Отделение: —", font=("Calibri", 10))
+        self.lbl_context_dept.pack(side=tk.LEFT, padx=(0, 16))
+        self.lbl_context_patients = ttkb.Label(self.context_frame, text="Пациентов: —", font=("Calibri", 10))
+        self.lbl_context_patients.pack(side=tk.LEFT)
 
         bottom_frame = ttkb.Frame(self)
         bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
-        self.btn_save_txt = ttkb.Button(
+
+        export_frame = ttkb.Labelframe(bottom_frame, text="Параметры экспорта", padding=6)
+        export_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        export_inner = ttkb.Frame(export_frame)
+        export_inner.pack(fill=tk.X)
+        for section, var in self.export_sections.items():
+            ttkb.Checkbutton(
+                export_inner,
+                text=section,
+                variable=var,
+                bootstyle="round-toggle",
+            ).pack(side=tk.LEFT, padx=4, pady=2)
+
+        self.btn_save = ttkb.Button(
             bottom_frame,
-            text="💾 Сохранить отчёт (TXT)",
-            command=self.save_report_txt,
+            text="Сохранить отчёт…",
+            command=self._show_save_report_dialog,
             state=tk.DISABLED,
             bootstyle="success",
+            padding=(16, 6),
         )
-        self.btn_save_txt.pack(side=tk.LEFT, padx=5)
-        self.btn_save_excel = ttkb.Button(
-            bottom_frame,
-            text="📊 Сохранить в Excel",
-            command=self.save_report_excel,
-            state=tk.DISABLED,
-            bootstyle="warning",
-        )
-        self.btn_save_excel.pack(side=tk.LEFT, padx=5)
+        self.btn_save.pack(side=tk.RIGHT, padx=10)
 
-        # Notebook заполняет всё доступное место при ресайзе окна
-        self.notebook = ttkb.Notebook(self, bootstyle="primary")
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.work_area = ttkb.Frame(self)
+        self.work_area.pack(fill=tk.BOTH, expand=True)
+
+        self.empty_wrap = build_empty_state(
+            self.work_area,
+            title="Анализ работы отделения",
+            steps=[
+                "Загрузите отчёт ЭМК",
+                "Выберите отделение",
+                "Смотрите нарушения и сохраните отчёт",
+            ],
+            load_text="Загрузить Excel-файл",
+            on_load=self.load_file,
+        )
+        self.empty_wrap.pack(fill=tk.BOTH, expand=True)
+
+        self.notebook = ttkb.Notebook(self.work_area, bootstyle="primary")
 
         self.main_tab = ttkb.Frame(self.notebook)
         self.viol_main_tab = ttkb.Frame(self.notebook)
         self.doctors_tab = ttkb.Frame(self.notebook)
-        self.export_tab = ttkb.Frame(self.notebook)
 
-        self.notebook.add(self.main_tab, text="📊 Основные показатели")
-        self.notebook.add(self.viol_main_tab, text="⚠️ Нарушения")
-        self.notebook.add(self.doctors_tab, text="👨‍⚕️ Сводка по врачам")
-        self.notebook.add(self.export_tab, text="📁 Экспорт отчёта")
+        self.notebook.add(self.main_tab, text="Основные показатели")
+        self.notebook.add(self.viol_main_tab, text="Нарушения")
+        self.notebook.add(self.doctors_tab, text="Сводка по врачам")
 
         self.viol_notebook = ttkb.Notebook(self.viol_main_tab, bootstyle="danger")
         self.viol_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.viol_cat_tab = ttkb.Frame(self.viol_notebook)
         self.viol_all_tab = ttkb.Frame(self.viol_notebook)
-        self.viol_notebook.add(self.viol_cat_tab, text="📂 По категориям")
-        self.viol_notebook.add(self.viol_all_tab, text="📋 Все нарушения")
+        self.viol_notebook.add(self.viol_cat_tab, text="По категориям")
+        self.viol_notebook.add(self.viol_all_tab, text="Все нарушения")
+
+        self._update_status()
+
+    def _show_work_content(self, has_analysis: bool) -> None:
+        if has_analysis:
+            self.empty_wrap.pack_forget()
+            self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        else:
+            self.notebook.pack_forget()
+            self.empty_wrap.pack(fill=tk.BOTH, expand=True)
+
+    def _bind_click_nav(self, widget, tab_index: int) -> None:
+        widget.bind("<Button-1>", lambda _e: self.notebook.select(tab_index))
+        try:
+            widget.configure(cursor="hand2")
+        except tk.TclError:
+            pass
 
     def _on_dropped_files(self, paths: list[str]) -> None:
         if paths:
@@ -130,12 +176,25 @@ class LorReportFrame(ttkb.Frame):
         if file_path:
             self._load_path(file_path)
 
+    def open_path(self, path: str) -> None:
+        self._load_path(path)
+
+    def hotkey_open(self) -> None:
+        self.load_file()
+
+    def hotkey_save(self) -> None:
+        self._show_save_report_dialog()
+
+    def hotkey_copy(self) -> None:
+        if self.analysis:
+            self._copy_main_metrics()
+
     def _load_path(self, file_path: str) -> None:
         self.file_path = file_path
         self.file_name = Path(file_path).name
         self._clear_all_tabs()
-        self.btn_save_txt.configure(state=tk.DISABLED)
-        self.btn_save_excel.configure(state=tk.DISABLED)
+        self.btn_save.configure(state=tk.DISABLED)
+        self._show_work_content(False)
 
         def work(progress):
             return load_lor_excel(file_path, progress=progress)
@@ -152,6 +211,9 @@ class LorReportFrame(ttkb.Frame):
                 self.department_var.set(departments[0])
             else:
                 self.department_var.set("")
+            push_recent_file(self.app.app_settings, "recent_emk", file_path)
+            if hasattr(self.app, "refresh_recent_menus"):
+                self.app.refresh_recent_menus()
             self._run_analysis_and_display()
 
         def on_error(exc: BaseException):
@@ -169,6 +231,7 @@ class LorReportFrame(ttkb.Frame):
 
     def _run_analysis_and_display(self) -> None:
         if self.df_full is None:
+            self._show_work_content(False)
             return
         dept = self.department_var.get().strip()
         filtered = filter_by_department(self.df_full, dept or None)
@@ -177,23 +240,32 @@ class LorReportFrame(ttkb.Frame):
             self.analysis = None
             self._update_status()
             self._clear_all_tabs()
-            self.btn_save_txt.configure(state=tk.DISABLED)
-            self.btn_save_excel.configure(state=tk.DISABLED)
+            self.btn_save.configure(state=tk.DISABLED)
+            self._show_work_content(False)
             return
         self.analysis = analyze_lor(filtered)
         self._update_status()
         self.display_results()
-        self.btn_save_txt.configure(state=tk.NORMAL)
-        self.btn_save_excel.configure(state=tk.NORMAL)
+        self.btn_save.configure(state=tk.NORMAL)
+        self._show_work_content(True)
 
     def _update_status(self) -> None:
         dept = self.department_var.get() or "—"
         count = self.analysis.total_patients if self.analysis else 0
         name = self.file_name or "—"
-        self.status_label.configure(text=f"{name}  |  {dept}  |  пациентов: {count}")
+        period = "—"
+        if self.analysis and self.analysis.period_start and self.analysis.period_end:
+            period = (
+                f"{self.analysis.period_start.strftime('%d.%m.%Y')} — "
+                f"{self.analysis.period_end.strftime('%d.%m.%Y')}"
+            )
+        self.lbl_context_file.configure(text=f"Файл: {name}")
+        self.lbl_context_period.configure(text=f"Период: {period}")
+        self.lbl_context_dept.configure(text=f"Отделение: {dept}")
+        self.lbl_context_patients.configure(text=f"Пациентов: {count}")
 
     def _clear_all_tabs(self) -> None:
-        for tab in [self.main_tab, self.viol_cat_tab, self.viol_all_tab, self.doctors_tab, self.export_tab]:
+        for tab in [self.main_tab, self.viol_cat_tab, self.viol_all_tab, self.doctors_tab]:
             for widget in tab.winfo_children():
                 widget.destroy()
 
@@ -201,7 +273,6 @@ class LorReportFrame(ttkb.Frame):
         self._create_main_tab()
         self._create_violations_tabs()
         self._create_doctors_tab()
-        self._create_export_tab()
 
     def _create_main_tab(self) -> None:
         for w in self.main_tab.winfo_children():
@@ -216,41 +287,57 @@ class LorReportFrame(ttkb.Frame):
 
         metrics_bar = ttkb.Frame(main_frame)
         metrics_bar.pack(fill=tk.X, pady=(0, 4))
-        period_txt = ""
-        if r.period_start and r.period_end:
-            period_txt = (
-                f"Период: {r.period_start.strftime('%d.%m.%Y')} — "
-                f"{r.period_end.strftime('%d.%m.%Y')}"
-            )
-        ttkb.Label(metrics_bar, text=period_txt, bootstyle="secondary").pack(side=tk.LEFT)
         ttkb.Button(
             metrics_bar,
-            text="📋 Копировать показатели",
+            text="Копировать показатели",
             command=self._copy_main_metrics,
             bootstyle="info",
         ).pack(side=tk.RIGHT)
 
         metrics_frame = ttkb.Frame(main_frame)
         metrics_frame.pack(fill=tk.X, pady=5)
-        for i, (label, value) in enumerate(
+        viol_tab = 1
+        for i, (label, value, tab_index) in enumerate(
             [
-                ("👥 Всего пациентов", str(r.total_patients)),
-                ("📅 Средний койко-день", f"{r.avg_beddays:.2f}"),
-                ("🚑 Экстренные госпитализации", str(r.urgent)),
-                ("📋 Плановые госпитализации", str(r.planned)),
+                ("Всего пациентов", str(r.total_patients), 0),
+                ("Средний койко-день", f"{r.avg_beddays:.2f}", viol_tab),
+                ("Экстренные госпитализации", str(r.urgent), viol_tab),
+                ("Плановые госпитализации", str(r.planned), viol_tab),
             ]
         ):
             card = ttkb.Frame(metrics_frame, bootstyle="light", padding=10)
             card.grid(row=0, column=i, padx=10, pady=5, sticky="nsew")
-            ttkb.Label(card, text=label, font=("Calibri", 14)).pack()
-            ttkb.Label(card, text=value, font=("Calibri", 24, "bold"), bootstyle="warning").pack()
+            lbl_title = ttkb.Label(card, text=label, font=("Calibri", 14))
+            lbl_title.pack()
+            lbl_value = ttkb.Label(
+                card, text=value, font=("Calibri", 24, "bold"), bootstyle="warning"
+            )
+            lbl_value.pack()
+            for w in (card, lbl_title, lbl_value):
+                self._bind_click_nav(w, tab_index)
             metrics_frame.columnconfigure(i, weight=1)
+
+        share_df = violation_share_table(r.violations_df)
+        if not share_df.empty:
+            chips_frame = ttkb.Frame(main_frame)
+            chips_frame.pack(fill=tk.X, pady=(0, 6))
+            ttkb.Label(chips_frame, text="Нарушения:", font=("Calibri", 11)).pack(
+                side=tk.LEFT, padx=(0, 8)
+            )
+            for _, row in share_df.iterrows():
+                chip = ttkb.Label(
+                    chips_frame,
+                    text=f"{row['Тип нарушения']}: {row['Количество']} ({row['Доля, %']}%)",
+                    bootstyle="info",
+                    padding=(8, 4),
+                )
+                chip.pack(side=tk.LEFT, padx=3)
+                self._bind_click_nav(chip, viol_tab)
 
         chart_row = ttkb.Frame(main_frame)
         chart_row.pack(fill=tk.BOTH, expand=True, pady=10)
 
-        share_df = violation_share_table(r.violations_df)
-        share_frame = ttkb.Labelframe(chart_row, text="📊 Структура нарушений", padding=10)
+        share_frame = ttkb.Labelframe(chart_row, text="Структура нарушений", padding=10)
         share_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         if share_df.empty:
             ttkb.Label(
@@ -267,6 +354,8 @@ class LorReportFrame(ttkb.Frame):
                 clipboard_host=self,
                 copy_df=share_df,
                 on_copy_df=self._copy_df,
+                tag_column_index=0,
+                tag_colors=VIOLATION_TREE_TAGS,
             )
 
         graph_frame = ttkb.Frame(chart_row)
@@ -279,7 +368,8 @@ class LorReportFrame(ttkb.Frame):
         else:
             labels = share_df["Тип нарушения"].tolist()
             shares = share_df["Доля, %"].tolist()
-            bars = ax.bar(range(len(labels)), shares, color="#5B9BD5")
+            colors = [chart_color_for_violation(lbl) for lbl in labels]
+            bars = ax.bar(range(len(labels)), shares, color=colors)
             ax.set_xticks(range(len(labels)))
             ax.set_xticklabels(labels, rotation=25, ha="right", fontsize=8)
             ax.set_ylabel("Доля, %")
@@ -300,7 +390,7 @@ class LorReportFrame(ttkb.Frame):
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         ttkb.Button(
             graph_frame,
-            text="📷 Сохранить график",
+            text="Сохранить график",
             command=lambda: self._save_graph(fig),
             bootstyle="secondary",
         ).pack(pady=5)
@@ -316,7 +406,7 @@ class LorReportFrame(ttkb.Frame):
             clipboard_host=self,
         )
 
-        note_frame = ttkb.Labelframe(main_frame, text="📝 Аналитическая записка", padding=10)
+        note_frame = ttkb.Labelframe(main_frame, text="Аналитическая записка", padding=10)
         note_frame.pack(fill=tk.X, pady=10)
         note_text = tk.Text(note_frame, height=7, font=("Calibri", 12), wrap=tk.WORD)
         note_text.pack(fill=tk.BOTH, expand=True)
@@ -389,13 +479,50 @@ class LorReportFrame(ttkb.Frame):
         end = r.period_end if r else None
         return emk_report_basename(start, end) + extension
 
+    def _show_save_report_dialog(self) -> None:
+        if not self.analysis:
+            messagebox.showwarning("Нет данных", "Сначала загрузите и проанализируйте файл.")
+            return
+        dialog = tk.Toplevel(self)
+        dialog.title("Сохранить отчёт")
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        ttkb.Label(dialog, text="Выберите формат отчёта:", font=("Calibri", 12)).pack(
+            padx=20, pady=(16, 10)
+        )
+        btn_row = ttkb.Frame(dialog)
+        btn_row.pack(padx=20, pady=(0, 16))
+
+        def save_txt():
+            dialog.destroy()
+            self.save_report_txt()
+
+        def save_excel():
+            dialog.destroy()
+            self.save_report_excel()
+
+        ttkb.Button(btn_row, text="Текст (TXT)", command=save_txt, bootstyle="success", width=14).pack(
+            side=tk.LEFT, padx=6
+        )
+        ttkb.Button(btn_row, text="Excel", command=save_excel, bootstyle="warning", width=14).pack(
+            side=tk.LEFT, padx=6
+        )
+        ttkb.Button(btn_row, text="Отмена", command=dialog.destroy, bootstyle="secondary", width=10).pack(
+            side=tk.LEFT, padx=6
+        )
+        dialog.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - dialog.winfo_width()) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{x}+{y}")
+
     def _create_violations_tabs(self) -> None:
         for w in self.viol_cat_tab.winfo_children():
             w.destroy()
         if not self.analysis or self.analysis.violations_df.empty:
             ttkb.Label(
                 self.viol_cat_tab,
-                text="✅ Нарушений не найдено",
+                text="Нарушений не найдено",
                 font=("Calibri", 14),
                 bootstyle="success",
             ).pack(pady=50)
@@ -403,34 +530,35 @@ class LorReportFrame(ttkb.Frame):
             return
 
         r = self.analysis
-        icons = {
-            "Первичный осмотр": "🩺",
-            "Эпикриз": "📄",
-            "МКСБ": "📑",
-            "Лекарственные назначения": "💊",
-            "Дневниковые записи": "📋",
-            "ИДС": "✍️",
-            "Длительная госпитализация": "⏰",
-            "Протоколы операций": "🔪",
-        }
-
         cat_notebook = ttkb.Notebook(self.viol_cat_tab, bootstyle="danger")
         cat_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         present_categories: set[str] = set()
         for group_name, group_data in r.violations_df.groupby("тип_нарушения"):
             present_categories.add(group_name)
             tab = ttkb.Frame(cat_notebook)
-            cat_notebook.add(tab, text=f"{icons.get(group_name, '⚠️')} {group_name}")
-            columns = ("КВС", "возраст", "тип госпитализации", "врач", "нарушение")
+            cat_notebook.add(tab, text=group_name)
+            columns = ("тип_нарушения", "КВС", "возраст", "тип госпитализации", "врач", "нарушение")
             headings = {
+                "тип_нарушения": "Тип",
                 "КВС": "КВС",
                 "возраст": "Возраст",
                 "тип госпитализации": "Тип",
                 "врач": "Врач",
                 "нарушение": "Нарушение",
             }
-            data = [tuple(row[col] for col in columns) for _, row in group_data.iterrows()]
-            make_filtered_tree(tab, columns, data, headings, clipboard_host=self)
+            data = [
+                (group_name,) + tuple(row[col] for col in columns[1:])
+                for _, row in group_data.iterrows()
+            ]
+            make_filtered_tree(
+                tab,
+                columns,
+                data,
+                headings,
+                clipboard_host=self,
+                tag_column_index=0,
+                tag_colors=VIOLATION_TREE_TAGS,
+            )
 
             if group_name == "ИДС" and not r.ids_stats.empty:
                 summary_frame = ttkb.Labelframe(tab, text="Сводка по врачам (ИДС)", padding=5)
@@ -458,7 +586,7 @@ class LorReportFrame(ttkb.Frame):
         if missing:
             ttkb.Label(
                 self.viol_cat_tab,
-                text="✅ Нарушений в других категориях не найдено",
+                text="Нарушений в других категориях не найдено",
                 font=("Calibri", 12),
                 bootstyle="secondary",
             ).pack(side=tk.BOTTOM, pady=(5, 0))
@@ -471,7 +599,7 @@ class LorReportFrame(ttkb.Frame):
         if not self.analysis or self.analysis.violations_df.empty:
             ttkb.Label(
                 self.viol_all_tab,
-                text="✅ Нарушений не найдено",
+                text="Нарушений не найдено",
                 font=("Calibri", 14),
                 bootstyle="success",
             ).pack(pady=50)
@@ -482,21 +610,21 @@ class LorReportFrame(ttkb.Frame):
         container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         category_info = {
-            "МКСБ": {"icon": "🚫", "title": "МКСБ (Не подписана)"},
-            "Протоколы операций": {"icon": "❌", "title": "Протоколы операций (несоответствие)"},
-            "Эпикриз": {"icon": "📝", "title": "Эпикризы (не оформлены)"},
-            "Первичный осмотр": {"icon": "🩺", "title": "Первичный осмотр (не оформлен)"},
-            "Лекарственные назначения": {"icon": "💊", "title": "Лекарственные назначения (отсутствуют)"},
-            "Дневниковые записи": {"icon": "📋", "title": "Дневниковые записи (недостаточно)"},
-            "ИДС": {"icon": "✍️", "title": "ИДС (отсутствует)"},
-            "Длительная госпитализация": {"icon": "⏰", "title": "Длительная госпитализация (>7 дней)"},
+            "МКСБ": {"title": "МКСБ (Не подписана)"},
+            "Протоколы операций": {"title": "Протоколы операций (несоответствие)"},
+            "Эпикриз": {"title": "Эпикризы (не оформлены)"},
+            "Первичный осмотр": {"title": "Первичный осмотр (не оформлен)"},
+            "Лекарственные назначения": {"title": "Лекарственные назначения (отсутствуют)"},
+            "Дневниковые записи": {"title": "Дневниковые записи (недостаточно)"},
+            "ИДС": {"title": "ИДС (отсутствует)"},
+            "Длительная госпитализация": {"title": "Длительная госпитализация (>7 дней)"},
         }
 
         grouped = r.violations_df.groupby("тип_нарушения")
         all_sections: list[tuple[str, str]] = []
         for vtype, group in grouped:
-            info = category_info.get(vtype, {"icon": "⚠️", "title": vtype})
-            lines = [f"{info['icon']} {info['title']}:"]
+            info = category_info.get(vtype, {"title": vtype})
+            lines = [f"{info['title']}:"]
             if vtype == "Протоколы операций":
                 for _, row in group.iterrows():
                     doctor_short = format_doctor_name(row["врач"])
@@ -546,7 +674,7 @@ class LorReportFrame(ttkb.Frame):
             self.clipboard_append(full_text)
             messagebox.showinfo("Скопировано", "Все нарушения скопированы в буфер обмена.")
 
-        ttkb.Button(top_frame, text="📋 Копировать всё", command=copy_all, bootstyle="info").pack(
+        ttkb.Button(top_frame, text="Копировать всё", command=copy_all, bootstyle="info").pack(
             side=tk.LEFT, padx=5
         )
 
@@ -572,7 +700,7 @@ class LorReportFrame(ttkb.Frame):
             else:
                 messagebox.showwarning("Нет выбора", "Не выбрано ни одной категории.")
 
-        ttkb.Button(top_frame, text="📋 Копировать выбранные", command=copy_selected, bootstyle="warning").pack(
+        ttkb.Button(top_frame, text="Копировать выбранные", command=copy_selected, bootstyle="warning").pack(
             side=tk.LEFT, padx=5
         )
 
@@ -632,24 +760,6 @@ class LorReportFrame(ttkb.Frame):
             for i, (_, row) in enumerate(r.doctor_stats.iterrows(), start=1)
         ]
         make_filtered_tree(self.doctors_tab, columns, data, headings, clipboard_host=self)
-
-    def _create_export_tab(self) -> None:
-        for w in self.export_tab.winfo_children():
-            w.destroy()
-        frame = ttkb.Frame(self.export_tab, padding=20)
-        frame.pack(fill=tk.BOTH, expand=True)
-        ttkb.Label(frame, text="Выберите разделы для экспорта", font=("Calibri", 14, "bold")).pack(
-            anchor=tk.W, pady=10
-        )
-        for section, var in self.export_sections.items():
-            ttkb.Checkbutton(frame, text=section, variable=var, bootstyle="round-toggle").pack(
-                anchor=tk.W, padx=20
-            )
-        ttkb.Label(
-            frame,
-            text="Метаданные (дата и имя файла) будут добавлены при включении опции «Метаданные».",
-            font=("Calibri", 10),
-        ).pack(anchor=tk.W, pady=5)
 
     def _save_graph(self, figure) -> None:
         file_path = filedialog.asksaveasfilename(

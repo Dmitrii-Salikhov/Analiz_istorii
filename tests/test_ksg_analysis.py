@@ -73,9 +73,27 @@ def test_kslp_child_requires_nonzero():
     assert result["total_kslp_issues"] >= 1
 
 
-def test_ksg_period_sort_from_name():
-    assert ksg_period_sort_key(None, "КСГ за май 2026.xlsx")[:2] == (2026, 5)
-    assert ksg_period_sort_key(None, "Ксг за июнь.xlsx")[1] == 6
+def test_ksg_period_uses_vypiska_not_postuplenie():
+    df = pd.DataFrame(
+        {
+            "Поступление": ["28.04.2026", "02.05.2026"],
+            "Выписка": ["05.05.2026", "20.05.2026"],
+        }
+    )
+    assert ksg_period_sort_key(df, "file.xlsx")[:2] == (2026, 5)
+
+
+def test_short_month_label_from_vypiska():
+    from gui.ui_theme import short_month_label
+
+    df = pd.DataFrame(
+        {
+            "Поступление": ["25.05.2026"],
+            "Выписка": ["10.06.2026"],
+        }
+    )
+    label = short_month_label("anything.xlsx", df)
+    assert "июн" in label and "2026" in label
 
 
 def test_sort_ksg_files_chronologically():

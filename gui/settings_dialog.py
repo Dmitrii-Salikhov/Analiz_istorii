@@ -73,7 +73,7 @@ class SettingsDialog(tk.Toplevel):
             row=row, column=0, sticky="w", pady=(0, 4)
         )
         row += 1
-        self.theme_var = tk.StringVar(value=settings.get("theme", "cosmo"))
+        self.theme_var = tk.StringVar(value=settings.get("theme", "flatly"))
         theme_combo = ttkb.Combobox(
             body,
             textvariable=self.theme_var,

@@ -272,16 +272,19 @@ def analyze_ksg(
 
 
 def ksg_period_sort_key(df: pd.DataFrame | None, name: str = "") -> tuple[int, int, int]:
-    """Ключ сортировки месяца: (год, месяц, день) по данным файла или имени."""
+    """Ключ сортировки месяца: (год, месяц, день) по графе «Выписка»."""
     if df is not None and not df.empty:
-        date_col = "Поступление" if "Поступление" in df.columns else (
-            "Выписка" if "Выписка" in df.columns else None
+        # Период отчёта КСГ = месяц выписки, не поступления
+        date_col = "Выписка" if "Выписка" in df.columns else (
+            "Поступление" if "Поступление" in df.columns else None
         )
         if date_col:
             dates = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce").dropna()
             if not dates.empty:
-                mid = dates.min()
-                return int(mid.year), int(mid.month), int(mid.day)
+                periods = dates.dt.to_period("M")
+                mode = periods.mode()
+                mid = mode.iloc[0] if not mode.empty else periods.min()
+                return int(mid.year), int(mid.month), 1
 
     lower = (name or "").lower()
     year_match = re.search(r"(20\d{2})", lower)

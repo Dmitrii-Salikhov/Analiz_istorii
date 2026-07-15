@@ -13,8 +13,10 @@ import ttkbootstrap as ttkb
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-from config_store import save_config
+from config_store import push_recent_file, save_config
 from excel_io import ExcelParseError, MissingColumnsError, load_ksg_excel
+from gui.helpers import build_empty_state
+from gui.ui_theme import short_month_label
 from gui.widgets import ScrollableFrame, enable_file_drop, make_filtered_tree, run_with_progress
 from ksg_analysis import (
     analyze_ksg,
@@ -48,7 +50,7 @@ class KsgReportFrame(ttkb.Frame):
 
         self.btn_load = ttkb.Button(
             ctrl_frame,
-            text="📂 Загрузить файлы КСГ",
+            text="Загрузить файлы КСГ",
             command=self.load_files,
             bootstyle="info",
             padding=(20, 5),
@@ -57,7 +59,7 @@ class KsgReportFrame(ttkb.Frame):
 
         self.btn_remove = ttkb.Button(
             ctrl_frame,
-            text="🗑️ Удалить выбранный",
+            text="Удалить выбранный",
             command=self.remove_file,
             bootstyle="danger",
             state=tk.DISABLED,
@@ -74,39 +76,102 @@ class KsgReportFrame(ttkb.Frame):
 
         self.btn_copy_all = ttkb.Button(
             ctrl_frame,
-            text="📋 Копировать всё",
+            text="Копировать всё",
             command=self.copy_all_tabs,
             bootstyle="info",
             state=tk.DISABLED,
         )
         self.btn_copy_all.pack(side=tk.RIGHT, padx=5)
 
-        self.notebook = ttkb.Notebook(self, bootstyle="primary")
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.context_frame = ttkb.Frame(self, bootstyle="secondary", padding=(8, 4))
+        self.context_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 4))
 
-        tabs = [
-            ("patients", "1. Пациенты по врачам"),
-            ("operations", "2. Операции"),
-            ("money", "3. Сумма к оплате"),
-            ("analysis", "4. Анализ случаев"),
-            ("kslp", "5. Проверка КСЛП"),
-            ("age_groups", "6. Возрастные группы"),
-            ("kz", "7. Средний КЗ"),
-            ("compare", "8. Сравнение"),
-            ("export", "📁 Экспорт"),
-        ]
+        self.lbl_context_file = ttkb.Label(self.context_frame, text="Файл: —", font=("Calibri", 10))
+        self.lbl_context_file.pack(side=tk.LEFT, padx=(0, 16))
+        self.lbl_context_month = ttkb.Label(self.context_frame, text="Период: —", font=("Calibri", 10))
+        self.lbl_context_month.pack(side=tk.LEFT, padx=(0, 16))
+        self.lbl_context_patients = ttkb.Label(self.context_frame, text="Пациентов: —", font=("Calibri", 10))
+        self.lbl_context_patients.pack(side=tk.LEFT, padx=(0, 16))
+        self.lbl_context_sum = ttkb.Label(self.context_frame, text="Сумма: —", font=("Calibri", 10))
+        self.lbl_context_sum.pack(side=tk.LEFT)
+
+        self.work_area = ttkb.Frame(self)
+        self.work_area.pack(fill=tk.BOTH, expand=True)
+
+        self.empty_wrap = build_empty_state(
+            self.work_area,
+            title="Анализ КСГ",
+            steps=[
+                "Загрузите один или несколько файлов КСГ",
+                "Просмотрите сводку по пациентам и суммам",
+                "Сравните месяцы и сохраните отчёт",
+            ],
+            load_text="Загрузить файлы КСГ",
+            on_load=self.load_files,
+        )
+        self.empty_wrap.pack(fill=tk.BOTH, expand=True)
+
+        self.outer_notebook = ttkb.Notebook(self.work_area, bootstyle="primary")
+
+        summary_outer = ttkb.Frame(self.outer_notebook)
+        cases_outer = ttkb.Frame(self.outer_notebook)
+        compare_outer = ttkb.Frame(self.outer_notebook)
+        export_outer = ttkb.Frame(self.outer_notebook)
+
+        self.outer_notebook.add(summary_outer, text="Сводка")
+        self.outer_notebook.add(cases_outer, text="Случаи и КСЛП")
+        self.outer_notebook.add(compare_outer, text="Сравнение")
+        self.outer_notebook.add(export_outer, text="Экспорт")
+
+        self.summary_notebook = ttkb.Notebook(summary_outer, bootstyle="info")
+        self.summary_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        self.cases_notebook = ttkb.Notebook(cases_outer, bootstyle="warning")
+        self.cases_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
         self.tab_frames: dict[str, ttkb.Frame] = {}
-        for key, title in tabs:
-            frame = ttkb.Frame(self.notebook)
-            self.notebook.add(frame, text=title)
+
+        summary_tabs = [
+            ("patients", "Пациенты"),
+            ("operations", "Операции"),
+            ("money", "Сумма"),
+            ("age_groups", "Возраст"),
+            ("kz", "КЗ"),
+        ]
+        for key, title in summary_tabs:
+            frame = ttkb.Frame(self.summary_notebook)
+            self.summary_notebook.add(frame, text=title)
             self.tab_frames[key] = frame
 
+        cases_tabs = [
+            ("analysis", "Анализ случаев"),
+            ("kslp", "КСЛП"),
+        ]
+        for key, title in cases_tabs:
+            frame = ttkb.Frame(self.cases_notebook)
+            self.cases_notebook.add(frame, text=title)
+            self.tab_frames[key] = frame
+
+        self.tab_frames["compare"] = compare_outer
+        self.tab_frames["export"] = export_outer
+
+        self._update_context_bar()
+
+    def _show_work_content(self, has_files: bool) -> None:
+        if has_files:
+            self.empty_wrap.pack_forget()
+            self.outer_notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        else:
+            self.outer_notebook.pack_forget()
+            self.empty_wrap.pack(fill=tk.BOTH, expand=True)
+
+    def _file_label(self, f: dict) -> str:
+        return short_month_label(f["name"], f.get("df"))
+
     def _on_dropped_files(self, paths: list[str]) -> None:
-        for fp in paths:
-            self._add_file(fp)
-        if self.loaded_files:
-            self.active_file_index = len(self.loaded_files) - 1
-            self._activate_file(self.active_file_index)
+        pending = [fp for fp in paths if fp not in {f["path"] for f in self.loaded_files}]
+        if pending:
+            self._load_paths_batch(pending)
 
     def load_files(self) -> None:
         file_paths = filedialog.askopenfilenames(filetypes=[("Excel files", "*.xlsx")])
@@ -116,6 +181,24 @@ class KsgReportFrame(ttkb.Frame):
         if not pending:
             return
         self._load_paths_batch(pending)
+
+    def open_path(self, path: str) -> None:
+        self.open_paths([path])
+
+    def open_paths(self, paths: list[str]) -> None:
+        pending = [fp for fp in paths if fp not in {f["path"] for f in self.loaded_files}]
+        if pending:
+            self._load_paths_batch(pending)
+
+    def hotkey_open(self) -> None:
+        self.load_files()
+
+    def hotkey_save(self) -> None:
+        if self.results:
+            self.save_report_excel()
+
+    def hotkey_copy(self) -> None:
+        self.copy_all_tabs()
 
     def _load_paths_batch(self, paths: list[str]) -> None:
         queue = list(paths)
@@ -138,6 +221,9 @@ class KsgReportFrame(ttkb.Frame):
                 self.loaded_files.append(
                     {"name": name, "path": fp, "df": df, "results": results}
                 )
+                push_recent_file(self.app.app_settings, "recent_ksg", fp)
+                if hasattr(self.app, "refresh_recent_menus"):
+                    self.app.refresh_recent_menus()
                 self._sort_loaded_files(active_path=fp)
                 load_next()
 
@@ -166,6 +252,9 @@ class KsgReportFrame(ttkb.Frame):
             self.loaded_files.append(
                 {"name": name, "path": file_path, "df": df, "results": results}
             )
+            push_recent_file(self.app.app_settings, "recent_ksg", file_path)
+            if hasattr(self.app, "refresh_recent_menus"):
+                self.app.refresh_recent_menus()
             self._sort_loaded_files(active_path=file_path)
             if self.loaded_files:
                 self._activate_file(self.active_file_index)
@@ -206,6 +295,8 @@ class KsgReportFrame(ttkb.Frame):
             self._clear_all_tabs()
             self.btn_remove.configure(state=tk.DISABLED)
             self.btn_copy_all.configure(state=tk.DISABLED)
+            self._show_work_content(False)
+            self._update_context_bar()
         else:
             new_idx = min(idx, len(self.loaded_files) - 1)
             self.active_file_index = new_idx
@@ -226,12 +317,30 @@ class KsgReportFrame(ttkb.Frame):
         self.display_all()
         self.btn_remove.configure(state=tk.NORMAL)
         self.btn_copy_all.configure(state=tk.NORMAL)
+        self._show_work_content(True)
+        self._update_context_bar()
 
     def _update_file_list(self) -> None:
-        names = [f["name"] for f in self.loaded_files]
-        self.file_combobox["values"] = names
+        labels = [self._file_label(f) for f in self.loaded_files]
+        self.file_combobox["values"] = labels
         if self.active_file_index >= 0:
             self.file_combobox.current(self.active_file_index)
+
+    def _update_context_bar(self) -> None:
+        if self.results and self.active_file_index >= 0:
+            f = self.loaded_files[self.active_file_index]
+            month = self._file_label(f)
+            self.lbl_context_file.configure(text=f"Файл: {self.file_name}")
+            self.lbl_context_month.configure(text=f"Период: {month}")
+            self.lbl_context_patients.configure(text=f"Пациентов: {self.results['total_patients']}")
+            self.lbl_context_sum.configure(
+                text=f"Сумма: {self.results['total_sum']:,.2f} руб."
+            )
+        else:
+            self.lbl_context_file.configure(text="Файл: —")
+            self.lbl_context_month.configure(text="Период: —")
+            self.lbl_context_patients.configure(text="Пациентов: —")
+            self.lbl_context_sum.configure(text="Сумма: —")
 
     def _clear_all_tabs(self) -> None:
         for key in self.tab_frames:
@@ -243,6 +352,7 @@ class KsgReportFrame(ttkb.Frame):
             return
         self.results = analyze_ksg(self.df, self.reference, self.app.app_settings)
         self.loaded_files[self.active_file_index]["results"] = self.results
+        self._update_context_bar()
 
     def display_all(self) -> None:
         self._clear_all_tabs()
@@ -338,7 +448,7 @@ class KsgReportFrame(ttkb.Frame):
         canvas.get_tk_widget().pack(pady=10)
         ttkb.Button(
             frame,
-            text="📷 Сохранить график",
+            text="Сохранить график",
             command=lambda: self._save_graph(fig),
             bootstyle="secondary",
         ).pack()
@@ -434,7 +544,7 @@ class KsgReportFrame(ttkb.Frame):
 
         ttkb.Button(
             frame,
-            text="📋 Скопировать сводку всех случаев",
+            text="Скопировать сводку всех случаев",
             command=copy_cases,
             bootstyle="info",
         ).pack(pady=5)
@@ -459,14 +569,14 @@ class KsgReportFrame(ttkb.Frame):
             )
             ttkb.Button(
                 scroll.scrollable_frame,
-                text="📋 Копировать список нарушений КСЛП",
+                text="Копировать список нарушений КСЛП",
                 command=lambda: self._copy_df_as_text(r["kslp_issues"]),
                 bootstyle="info",
             ).pack(pady=5)
         else:
             ttkb.Label(
                 scroll.scrollable_frame,
-                text="✅ Нарушений КСЛП не обнаружено",
+                text="Нарушений КСЛП не обнаружено",
                 bootstyle="success",
                 font=("Calibri", 14),
             ).pack(pady=50)
@@ -483,7 +593,7 @@ class KsgReportFrame(ttkb.Frame):
         else:
             ttkb.Label(
                 scroll.scrollable_frame,
-                text="✅ Нарушений в других категориях не найдено",
+                text="Нарушений в других категориях не найдено",
                 font=("Calibri", 12),
                 bootstyle="secondary",
             ).pack(pady=(15, 5))
@@ -555,7 +665,10 @@ class KsgReportFrame(ttkb.Frame):
             var = tk.BooleanVar(value=False)
             self.compare_vars.append(var)
             ttkb.Checkbutton(
-                sel_frame, text=f["name"], variable=var, bootstyle="round-toggle"
+                sel_frame,
+                text=self._file_label(f),
+                variable=var,
+                bootstyle="round-toggle",
             ).pack(anchor=tk.W)
 
         btn_frame = ttkb.Frame(frame)
@@ -581,7 +694,7 @@ class KsgReportFrame(ttkb.Frame):
 
         ttkb.Button(
             btn_frame,
-            text="📊 Построить сравнение",
+            text="Построить сравнение",
             command=do_compare,
             bootstyle="success",
         ).pack(side=tk.LEFT, padx=5)
@@ -595,7 +708,7 @@ class KsgReportFrame(ttkb.Frame):
 
         files = sort_ksg_files_chronologically([self.loaded_files[i] for i in indices])
         summary = build_month_comparison(files)
-        names = summary["names"]
+        labels = [self._file_label(f) for f in files]
         results = [f["results"] for f in summary.get("files", files)]
 
         total_patients_sum = sum(summary["total_patients"])
@@ -611,8 +724,8 @@ class KsgReportFrame(ttkb.Frame):
         tbl_data1: dict = {
             "Показатель": ["Количество пациентов", "Общая сумма, руб.", "Средний КЗ", "Нарушений КСЛП"]
         }
-        for name, r in zip(names, results):
-            tbl_data1[name] = [
+        for label, r in zip(labels, results):
+            tbl_data1[label] = [
                 r["total_patients"],
                 f"{r['total_sum']:,.2f}",
                 f"{r['avg_kz_total']:.3f}",
@@ -641,7 +754,7 @@ class KsgReportFrame(ttkb.Frame):
             messagebox.showinfo("Скопировано", "Таблица общих показателей скопирована в буфер обмена")
 
         ttkb.Button(
-            table_frame1, text="📋 Копировать таблицу", command=copy_table1, bootstyle="secondary"
+            table_frame1, text="Копировать таблицу", command=copy_table1, bootstyle="secondary"
         ).pack(pady=2)
 
         all_doctors = summary["doctors"]
@@ -655,14 +768,14 @@ class KsgReportFrame(ttkb.Frame):
 
             tbl_data2: dict = {"Врач": all_doctors}
             total_by_doctor = {doc: 0.0 for doc in all_doctors}
-            for name, r in zip(names, results):
+            for label, r in zip(labels, results):
                 sums = r["doctor_sums"].set_index("Врач")["Сумма к оплате"]
                 vals = []
                 for doc in all_doctors:
                     val = float(sums.get(doc, 0) or 0)
                     total_by_doctor[doc] += val
                     vals.append(f"{val:,.2f}")
-                tbl_data2[name] = vals
+                tbl_data2[label] = vals
             tbl_data2["Итого"] = [f"{total_by_doctor[doc]:,.2f}" for doc in all_doctors]
             df_tbl2 = pd.DataFrame(tbl_data2)
 
@@ -683,7 +796,7 @@ class KsgReportFrame(ttkb.Frame):
                 messagebox.showinfo("Скопировано", "Таблица по врачам скопирована в буфер обмена")
 
             ttkb.Button(
-                table_frame2, text="📋 Копировать таблицу", command=copy_table2, bootstyle="secondary"
+                table_frame2, text="Копировать таблицу", command=copy_table2, bootstyle="secondary"
             ).pack(pady=2)
 
         graph_frame = ttkb.Labelframe(
@@ -712,7 +825,7 @@ class KsgReportFrame(ttkb.Frame):
 
         ax1.set_ylabel("Количество пациентов")
         ax1.set_xticks(list(x))
-        ax1.set_xticklabels(names, rotation=45, ha="right")
+        ax1.set_xticklabels(labels, rotation=45, ha="right")
 
         ax2 = ax1.twinx()
         line_sum, = ax2.plot(x, sums, "r^-", label="Сумма за месяц", linewidth=2, markersize=8)
@@ -746,8 +859,8 @@ class KsgReportFrame(ttkb.Frame):
         ax3.tick_params(axis="y", labelcolor="black")
 
         lines = [bars, line_sum, line_kz]
-        labels = [line.get_label() for line in lines]
-        ax1.legend(lines, labels, loc="upper left")
+        legend_labels = [line.get_label() for line in lines]
+        ax1.legend(lines, legend_labels, loc="upper left")
         ax1.set_title("Сравнение файлов")
         fig.tight_layout()
 
@@ -757,7 +870,7 @@ class KsgReportFrame(ttkb.Frame):
 
         ttkb.Button(
             graph_frame,
-            text="📷 Сохранить график",
+            text="Сохранить график",
             command=lambda: self._save_graph(fig),
             bootstyle="secondary",
         ).pack(pady=5)
@@ -765,11 +878,11 @@ class KsgReportFrame(ttkb.Frame):
     def _tab_export(self) -> None:
         frame = self.tab_frames["export"]
         ttkb.Label(frame, text="Экспорт отчёта КСГ", font=("Calibri", 14, "bold")).pack(pady=10)
-        ttkb.Button(frame, text="📄 Сохранить TXT", command=self.save_report_txt, bootstyle="success").pack(
+        ttkb.Button(frame, text="Сохранить TXT", command=self.save_report_txt, bootstyle="success").pack(
             pady=5
         )
         ttkb.Button(
-            frame, text="📊 Сохранить Excel", command=self.save_report_excel, bootstyle="warning"
+            frame, text="Сохранить Excel", command=self.save_report_excel, bootstyle="warning"
         ).pack(pady=5)
 
     def _copy_df_as_text(self, df: pd.DataFrame) -> None:

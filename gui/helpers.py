@@ -45,3 +45,24 @@ def offer_open_folder(file_path: str, title: str = "Сохранено") -> None
             subprocess.run(["xdg-open", folder], check=False)
     except OSError as e:
         messagebox.showwarning("Папка", f"Не удалось открыть папку:\n{e}")
+
+
+def build_empty_state(parent, title: str, steps: list[str], load_text: str, on_load) -> object:
+    """Пустой экран с шагами и кнопкой загрузки. Возвращает фрейм."""
+    import tkinter as tk
+    import ttkbootstrap as ttkb
+
+    wrap = ttkb.Frame(parent, padding=24)
+    card = ttkb.Labelframe(wrap, text=title, padding=20, bootstyle="info")
+    card.pack(expand=True, fill=tk.BOTH, padx=40, pady=30)
+    ttkb.Label(
+        card,
+        text="Перетащите Excel-файл в окно или нажмите кнопку ниже",
+        font=("Calibri", 14),
+    ).pack(pady=(0, 12))
+    for i, step in enumerate(steps, start=1):
+        ttkb.Label(card, text=f"{i}. {step}", font=("Calibri", 12)).pack(anchor=tk.W, pady=2)
+    ttkb.Button(card, text=load_text, command=on_load, bootstyle="info", padding=(24, 8)).pack(
+        pady=18
+    )
+    return wrap
