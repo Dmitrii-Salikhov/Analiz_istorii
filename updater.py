@@ -244,6 +244,15 @@ def perform_update(repo: str, release=None) -> None:
         _log(f"SHA-256 OK: {actual}")
 
         app_dir = get_base_dir()
+        if sys.platform == "win32" and getattr(sys, "frozen", False):
+            progress_win.destroy()
+            _launch_windows_frozen_update(app_dir, zip_path, sha_path)
+            messagebox.showinfo(
+                "Обновление",
+                "Обновление скачано.\nПриложение закроется и установит новую версию.",
+            )
+            sys.exit(0)
+
         _extract_update(zip_path, app_dir)
         _safe_remove(zip_path)
         _safe_remove(sha_path)
@@ -252,9 +261,7 @@ def perform_update(repo: str, release=None) -> None:
             "Обновление",
             "Обновление установлено.\nПриложение будет перезапущено.",
         )
-        python = sys.executable
-        main_py = str(app_dir / "main.py")
-        subprocess.Popen([python, main_py], cwd=str(app_dir))
+        _restart_application(app_dir)
         sys.exit(0)
     except Exception as e:
         try:
@@ -264,6 +271,57 @@ def perform_update(repo: str, release=None) -> None:
         messagebox.showerror("Ошибка обновления", f"Сбой при обновлении:\n{e}")
         _safe_remove(zip_path)
         _safe_remove(sha_path)
+
+
+def _restart_application(app_dir: Path) -> None:
+    if getattr(sys, "frozen", False):
+        subprocess.Popen([sys.executable], cwd=str(app_dir))
+        return
+    python = sys.executable
+    main_py = str(app_dir / "main.py")
+    subprocess.Popen([python, main_py], cwd=str(app_dir))
+
+
+def _launch_windows_frozen_update(app_dir: Path, zip_path: Path, sha_path: Path) -> None:
+    """
+    На Windows exe/DLL заняты процессом — распаковку делает внешний PowerShell-скрипт
+    после завершения текущего процесса.
+    """
+    ps_script = Path(tempfile.gettempdir()) / "update_analiz_istorii.ps1"
+    exe_name = Path(sys.executable).name
+    ps_app = str(app_dir).replace("'", "''")
+    ps_zip = str(zip_path).replace("'", "''")
+    ps_sha = str(sha_path).replace("'", "''")
+    ps_exe = str(Path(sys.executable)).replace("'", "''")
+    commands = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+$timeout = 60
+$procName = '{Path(exe_name).stem}'
+Get-Process -Name $procName -ErrorAction SilentlyContinue | Stop-Process -Force
+for ($i=0; $i -lt $timeout; $i++) {{
+    if (-not (Get-Process -Name $procName -ErrorAction SilentlyContinue)) {{ break }}
+    Start-Sleep -Milliseconds 100
+}}
+Expand-Archive -Path '{ps_zip}' -DestinationPath '{ps_app}' -Force
+if (Test-Path '{ps_app}\\_internal\\version.txt') {{
+    Copy-Item -Path '{ps_app}\\_internal\\version.txt' -Destination '{ps_app}\\version.txt' -Force
+}}
+Start-Process -FilePath '{ps_exe}'
+Remove-Item -Path '{ps_zip}' -Force -ErrorAction SilentlyContinue
+Remove-Item -Path '{ps_sha}' -Force -ErrorAction SilentlyContinue
+"""
+    ps_script.write_text(commands, encoding="utf-8")
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.Popen(
+        [
+            "powershell.exe",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(ps_script),
+        ],
+        creationflags=creationflags,
+    )
 
 
 def check_for_updates(repo: str, current_version_str: str, silent_if_updated: bool = False):

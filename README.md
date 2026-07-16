@@ -4,7 +4,16 @@
 - отчёта по заполнению ЭМК в стационаре (качество ведения историй);
 - файлов КСГ (суммы, операции, КСЛП, сравнение месяцев).
 
-## Запуск
+## Windows (без Python)
+
+1. Откройте [Releases](https://github.com/Dmitrii-Salikhov/Analiz_istorii/releases)
+2. Скачайте `AnalizIstorii.zip`
+3. Распакуйте архив
+4. Запустите `AnalizIstorii.exe`
+
+Сборка — папка PyInstaller (`onedir`), не один файл.
+
+## Запуск из исходников
 
 ```bash
 python3 -m venv venv
@@ -13,30 +22,23 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Опционально для drag-and-drop Excel:
-
-```bash
-pip install tkinterdnd2
-```
-
 ## Возможности
 
 - Выбор **отделения** после загрузки ЭМК-файла
 - Прогресс загрузки больших Excel
 - Понятные ошибки при отсутствии столбцов
-- Настройки порогов КСГ и правил КСЛП (меню «Настройки»)
-- Сравнение нескольких месяцев КСГ
+- Настройки порогов КСГ и правил КСЛП
+- Сравнение месяцев КСГ (месяц по графе «Выписка»)
 - Проверка обновлений с GitHub Releases (SHA-256)
 
-## Обновления через GitHub
+## Релизы и обновления
 
-1. Создайте репозиторий (например `Dmitrii-Salikhov/Analiz_istorii`).
-2. В настройках приложения укажите `owner/repo`.
-3. Публикуйте релиз с артефактами:
-   - `AnalizIstorii.zip` — содержимое приложения
-   - `AnalizIstorii.zip.sha256` — контрольная сумма
+При пуше тега `v*` GitHub Actions:
+1. прогоняет тесты;
+2. собирает Windows-папку PyInstaller;
+3. публикует `AnalizIstorii.zip` + `AnalizIstorii.zip.sha256`.
 
-Версия берётся из `version.txt`.
+В настройках приложения укажите репозиторий `Dmitrii-Salikhov/Analiz_istorii`.
 
 ## Тесты
 

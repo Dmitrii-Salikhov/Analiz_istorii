@@ -6,6 +6,7 @@ update.log
 dist/
 build/
 *.spec
+AppIcon.ico
 
 # Данные пациентов / локальные отчёты
 *.xlsx
