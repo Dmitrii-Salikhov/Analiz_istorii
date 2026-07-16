@@ -87,6 +87,15 @@ class App(ttkb.Window):
         self.notebook.add(self.lor_frame, text="Анализ ЭМК")
         self.notebook.add(self.ksg_frame, text="Анализ КСГ")
 
+        last_tab = int(self.app_settings.get("last_main_tab", 0) or 0)
+        try:
+            tabs = self.notebook.tabs()
+            if 0 <= last_tab < len(tabs):
+                self.notebook.select(last_tab)
+        except Exception:
+            pass
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_main_tab_changed)
+
         self.status_var = tk.StringVar(
             value=f"v{self.current_version}  |  {self.ksg_frame.reference_status}"
         )
@@ -325,8 +334,19 @@ class App(ttkb.Window):
             "© 2026",
         )
 
+    def _on_main_tab_changed(self, _event=None) -> None:
+        try:
+            idx = self.notebook.index(self.notebook.select())
+            self.app_settings["last_main_tab"] = int(idx)
+        except Exception:
+            pass
+
     def on_close(self) -> None:
         self.app_settings["window_geometry"] = self.geometry()
+        try:
+            self.app_settings["last_main_tab"] = int(self.notebook.index(self.notebook.select()))
+        except Exception:
+            pass
         save_config(self.app_settings)
         self.destroy()
 

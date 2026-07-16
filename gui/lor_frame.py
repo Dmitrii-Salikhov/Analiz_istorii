@@ -21,6 +21,17 @@ from excel_io import (
     load_lor_excel,
     pick_default_department,
 )
+from gui.chrome import (
+    PRIMARY_PAD,
+    SECONDARY_PAD,
+    SplitSaveButton,
+    ToolTip,
+    build_context_bar,
+    export_sections_dialog,
+    hotkey_hint,
+    make_kpi_card,
+    notify_copied,
+)
 from gui.helpers import auto_adjust_excel_columns, build_empty_state, offer_open_folder
 from gui.ui_theme import VIOLATION_TREE_TAGS, chart_color_for_violation
 from gui.widgets import ScrollableFrame, enable_file_drop, make_filtered_tree, run_with_progress
@@ -58,64 +69,63 @@ class LorReportFrame(ttkb.Frame):
         enable_file_drop(self, self._on_dropped_files, extensions=(".xlsx",))
 
     def _build_ui(self) -> None:
-        top_frame = ttkb.Frame(self)
-        top_frame.pack(side=tk.TOP, fill=tk.X, pady=5)
+        toolbar = ttkb.Frame(self, padding=(8, 6))
+        toolbar.pack(side=tk.TOP, fill=tk.X)
 
+        left = ttkb.Frame(toolbar)
+        left.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.btn_load = ttkb.Button(
-            top_frame,
-            text="Загрузить Excel-файл",
+            left,
+            text="Загрузить Excel",
             command=self.load_file,
-            bootstyle="info",
-            padding=(20, 5),
+            bootstyle="primary",
+            padding=PRIMARY_PAD,
         )
-        self.btn_load.pack(side=tk.LEFT, padx=5)
+        self.btn_load.pack(side=tk.LEFT, padx=(0, 8))
+        ToolTip(self.btn_load, f"Открыть файл ЭМК ({hotkey_hint('⌘O', 'Ctrl+O')})")
 
-        ttkb.Label(top_frame, text="Отделение:", font=("Calibri", 11)).pack(side=tk.LEFT, padx=(12, 4))
+        ttkb.Label(left, text="Отделение:", font=("Calibri", 11)).pack(side=tk.LEFT, padx=(4, 4))
         self.dept_combo = ttkb.Combobox(
-            top_frame,
+            left,
             textvariable=self.department_var,
             state="readonly",
-            width=42,
+            width=40,
         )
         self.dept_combo.pack(side=tk.LEFT, padx=4)
         self.dept_combo.bind("<<ComboboxSelected>>", self._on_department_changed)
 
-        self.context_frame = ttkb.Frame(self, bootstyle="secondary", padding=(8, 4))
-        self.context_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 4))
-
-        self.lbl_context_file = ttkb.Label(self.context_frame, text="Файл: —", font=("Calibri", 10))
-        self.lbl_context_file.pack(side=tk.LEFT, padx=(0, 16))
-        self.lbl_context_period = ttkb.Label(self.context_frame, text="Период: —", font=("Calibri", 10))
-        self.lbl_context_period.pack(side=tk.LEFT, padx=(0, 16))
-        self.lbl_context_dept = ttkb.Label(self.context_frame, text="Отделение: —", font=("Calibri", 10))
-        self.lbl_context_dept.pack(side=tk.LEFT, padx=(0, 16))
-        self.lbl_context_patients = ttkb.Label(self.context_frame, text="Пациентов: —", font=("Calibri", 10))
-        self.lbl_context_patients.pack(side=tk.LEFT)
-
-        bottom_frame = ttkb.Frame(self)
-        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
-
-        export_frame = ttkb.Labelframe(bottom_frame, text="Параметры экспорта", padding=6)
-        export_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        export_inner = ttkb.Frame(export_frame)
-        export_inner.pack(fill=tk.X)
-        for section, var in self.export_sections.items():
-            ttkb.Checkbutton(
-                export_inner,
-                text=section,
-                variable=var,
-                bootstyle="round-toggle",
-            ).pack(side=tk.LEFT, padx=4, pady=2)
-
-        self.btn_save = ttkb.Button(
-            bottom_frame,
-            text="Сохранить отчёт…",
-            command=self._show_save_report_dialog,
+        right = ttkb.Frame(toolbar)
+        right.pack(side=tk.RIGHT)
+        self.btn_copy = ttkb.Button(
+            right,
+            text="Копировать",
+            command=self._copy_main_metrics,
             state=tk.DISABLED,
-            bootstyle="success",
-            padding=(16, 6),
+            bootstyle="secondary-outline",
+            padding=SECONDARY_PAD,
         )
-        self.btn_save.pack(side=tk.RIGHT, padx=10)
+        self.btn_copy.pack(side=tk.LEFT, padx=(0, 6))
+        ToolTip(self.btn_copy, f"Копировать показатели ({hotkey_hint('⌘⇧C', 'Ctrl+Shift+C')})")
+
+        self.save_split = SplitSaveButton(
+            right,
+            on_excel=self._save_excel_with_options,
+            on_txt=self._save_txt_with_options,
+            tooltip=f"Сохранить Excel ({hotkey_hint('⌘S', 'Ctrl+S')})",
+        )
+        self.save_split.pack(side=tk.LEFT)
+        self.save_split.set_enabled(False)
+
+        self.context_frame, self.context_labels = build_context_bar(
+            self,
+            [
+                ("file", "Файл"),
+                ("period", "Период"),
+                ("extra", "Отделение"),
+                ("stat", "Пациентов"),
+            ],
+        )
+        self.context_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 4))
 
         self.work_area = ttkb.Frame(self)
         self.work_area.pack(fill=tk.BOTH, expand=True)
@@ -128,7 +138,7 @@ class LorReportFrame(ttkb.Frame):
                 "Выберите отделение",
                 "Смотрите нарушения и сохраните отчёт",
             ],
-            load_text="Загрузить Excel-файл",
+            load_text="Загрузить Excel",
             on_load=self.load_file,
         )
         self.empty_wrap.pack(fill=tk.BOTH, expand=True)
@@ -143,7 +153,7 @@ class LorReportFrame(ttkb.Frame):
         self.notebook.add(self.viol_main_tab, text="Нарушения")
         self.notebook.add(self.doctors_tab, text="Сводка по врачам")
 
-        self.viol_notebook = ttkb.Notebook(self.viol_main_tab, bootstyle="danger")
+        self.viol_notebook = ttkb.Notebook(self.viol_main_tab, bootstyle="primary")
         self.viol_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.viol_cat_tab = ttkb.Frame(self.viol_notebook)
         self.viol_all_tab = ttkb.Frame(self.viol_notebook)
@@ -183,17 +193,22 @@ class LorReportFrame(ttkb.Frame):
         self.load_file()
 
     def hotkey_save(self) -> None:
-        self._show_save_report_dialog()
+        self._save_excel_with_options()
 
     def hotkey_copy(self) -> None:
         if self.analysis:
             self._copy_main_metrics()
 
+    def _set_actions_enabled(self, enabled: bool) -> None:
+        state = tk.NORMAL if enabled else tk.DISABLED
+        self.btn_copy.configure(state=state)
+        self.save_split.set_enabled(enabled)
+
     def _load_path(self, file_path: str) -> None:
         self.file_path = file_path
         self.file_name = Path(file_path).name
         self._clear_all_tabs()
-        self.btn_save.configure(state=tk.DISABLED)
+        self._set_actions_enabled(False)
         self._show_work_content(False)
 
         def work(progress):
@@ -240,18 +255,18 @@ class LorReportFrame(ttkb.Frame):
             self.analysis = None
             self._update_status()
             self._clear_all_tabs()
-            self.btn_save.configure(state=tk.DISABLED)
+            self._set_actions_enabled(False)
             self._show_work_content(False)
             return
         self.analysis = analyze_lor(filtered)
         self._update_status()
         self.display_results()
-        self.btn_save.configure(state=tk.NORMAL)
+        self._set_actions_enabled(True)
         self._show_work_content(True)
 
     def _update_status(self) -> None:
         dept = self.department_var.get() or "—"
-        count = self.analysis.total_patients if self.analysis else 0
+        count = str(self.analysis.total_patients) if self.analysis else "—"
         name = self.file_name or "—"
         period = "—"
         if self.analysis and self.analysis.period_start and self.analysis.period_end:
@@ -259,10 +274,10 @@ class LorReportFrame(ttkb.Frame):
                 f"{self.analysis.period_start.strftime('%d.%m.%Y')} — "
                 f"{self.analysis.period_end.strftime('%d.%m.%Y')}"
             )
-        self.lbl_context_file.configure(text=f"Файл: {name}")
-        self.lbl_context_period.configure(text=f"Период: {period}")
-        self.lbl_context_dept.configure(text=f"Отделение: {dept}")
-        self.lbl_context_patients.configure(text=f"Пациентов: {count}")
+        self.context_labels["file"].configure(text=name)
+        self.context_labels["period"].configure(text=period)
+        self.context_labels["extra"].configure(text=dept)
+        self.context_labels["stat"].configure(text=count)
 
     def _clear_all_tabs(self) -> None:
         for tab in [self.main_tab, self.viol_cat_tab, self.viol_all_tab, self.doctors_tab]:
@@ -291,7 +306,8 @@ class LorReportFrame(ttkb.Frame):
             metrics_bar,
             text="Копировать показатели",
             command=self._copy_main_metrics,
-            bootstyle="info",
+            bootstyle="secondary-outline",
+            padding=SECONDARY_PAD,
         ).pack(side=tk.RIGHT)
 
         metrics_frame = ttkb.Frame(main_frame)
@@ -305,16 +321,13 @@ class LorReportFrame(ttkb.Frame):
                 ("Плановые госпитализации", str(r.planned), viol_tab),
             ]
         ):
-            card = ttkb.Frame(metrics_frame, bootstyle="light", padding=10)
-            card.grid(row=0, column=i, padx=10, pady=5, sticky="nsew")
-            lbl_title = ttkb.Label(card, text=label, font=("Calibri", 14))
-            lbl_title.pack()
-            lbl_value = ttkb.Label(
-                card, text=value, font=("Calibri", 24, "bold"), bootstyle="warning"
+            card = make_kpi_card(
+                metrics_frame,
+                label,
+                value,
+                on_click=lambda idx=tab_index: self.notebook.select(idx),
             )
-            lbl_value.pack()
-            for w in (card, lbl_title, lbl_value):
-                self._bind_click_nav(w, tab_index)
+            card.grid(row=0, column=i, padx=8, pady=5, sticky="nsew")
             metrics_frame.columnconfigure(i, weight=1)
 
         share_df = violation_share_table(r.violations_df)
@@ -438,7 +451,7 @@ class LorReportFrame(ttkb.Frame):
     def _copy_df(self, df: pd.DataFrame) -> None:
         self.clipboard_clear()
         self.clipboard_append(df.to_string(index=False))
-        messagebox.showinfo("Скопировано", "Таблица скопирована в буфер обмена")
+        notify_copied(self, "Таблица скопирована")
 
     def _copy_main_metrics(self) -> None:
         if not self.analysis:
@@ -471,7 +484,7 @@ class LorReportFrame(ttkb.Frame):
                 )
         self.clipboard_clear()
         self.clipboard_append("\n".join(lines))
-        messagebox.showinfo("Скопировано", "Основные показатели скопированы в буфер обмена")
+        notify_copied(self, "Показатели скопированы")
 
     def _default_report_path(self, extension: str) -> str:
         r = self.analysis
@@ -479,42 +492,19 @@ class LorReportFrame(ttkb.Frame):
         end = r.period_end if r else None
         return emk_report_basename(start, end) + extension
 
-    def _show_save_report_dialog(self) -> None:
+    def _save_excel_with_options(self) -> None:
         if not self.analysis:
             messagebox.showwarning("Нет данных", "Сначала загрузите и проанализируйте файл.")
             return
-        dialog = tk.Toplevel(self)
-        dialog.title("Сохранить отчёт")
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
-        dialog.resizable(False, False)
-        ttkb.Label(dialog, text="Выберите формат отчёта:", font=("Calibri", 12)).pack(
-            padx=20, pady=(16, 10)
-        )
-        btn_row = ttkb.Frame(dialog)
-        btn_row.pack(padx=20, pady=(0, 16))
-
-        def save_txt():
-            dialog.destroy()
-            self.save_report_txt()
-
-        def save_excel():
-            dialog.destroy()
+        if export_sections_dialog(self, self.export_sections, "Сохранить Excel"):
             self.save_report_excel()
 
-        ttkb.Button(btn_row, text="Текст (TXT)", command=save_txt, bootstyle="success", width=14).pack(
-            side=tk.LEFT, padx=6
-        )
-        ttkb.Button(btn_row, text="Excel", command=save_excel, bootstyle="warning", width=14).pack(
-            side=tk.LEFT, padx=6
-        )
-        ttkb.Button(btn_row, text="Отмена", command=dialog.destroy, bootstyle="secondary", width=10).pack(
-            side=tk.LEFT, padx=6
-        )
-        dialog.update_idletasks()
-        x = self.winfo_rootx() + (self.winfo_width() - dialog.winfo_width()) // 2
-        y = self.winfo_rooty() + (self.winfo_height() - dialog.winfo_height()) // 2
-        dialog.geometry(f"+{x}+{y}")
+    def _save_txt_with_options(self) -> None:
+        if not self.analysis:
+            messagebox.showwarning("Нет данных", "Сначала загрузите и проанализируйте файл.")
+            return
+        if export_sections_dialog(self, self.export_sections, "Сохранить TXT"):
+            self.save_report_txt()
 
     def _create_violations_tabs(self) -> None:
         for w in self.viol_cat_tab.winfo_children():
@@ -530,7 +520,7 @@ class LorReportFrame(ttkb.Frame):
             return
 
         r = self.analysis
-        cat_notebook = ttkb.Notebook(self.viol_cat_tab, bootstyle="danger")
+        cat_notebook = ttkb.Notebook(self.viol_cat_tab, bootstyle="primary")
         cat_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         present_categories: set[str] = set()
         for group_name, group_data in r.violations_df.groupby("тип_нарушения"):
@@ -672,11 +662,15 @@ class LorReportFrame(ttkb.Frame):
             full_text = "\n\n".join(block for _, block in all_sections)
             self.clipboard_clear()
             self.clipboard_append(full_text)
-            messagebox.showinfo("Скопировано", "Все нарушения скопированы в буфер обмена.")
+            notify_copied(self, "Нарушения скопированы")
 
-        ttkb.Button(top_frame, text="Копировать всё", command=copy_all, bootstyle="info").pack(
-            side=tk.LEFT, padx=5
-        )
+        ttkb.Button(
+            top_frame,
+            text="Копировать всё",
+            command=copy_all,
+            bootstyle="secondary-outline",
+            padding=SECONDARY_PAD,
+        ).pack(side=tk.LEFT, padx=5)
 
         check_frame = ttkb.Labelframe(top_frame, text="Выберите категории для копирования", padding=5)
         check_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10)
@@ -696,13 +690,17 @@ class LorReportFrame(ttkb.Frame):
             if selected_blocks:
                 self.clipboard_clear()
                 self.clipboard_append("\n\n".join(selected_blocks))
-                messagebox.showinfo("Скопировано", "Выбранные категории скопированы в буфер обмена.")
+                notify_copied(self, "Категории скопированы")
             else:
                 messagebox.showwarning("Нет выбора", "Не выбрано ни одной категории.")
 
-        ttkb.Button(top_frame, text="Копировать выбранные", command=copy_selected, bootstyle="warning").pack(
-            side=tk.LEFT, padx=5
-        )
+        ttkb.Button(
+            top_frame,
+            text="Копировать выбранные",
+            command=copy_selected,
+            bootstyle="secondary",
+            padding=SECONDARY_PAD,
+        ).pack(side=tk.LEFT, padx=5)
 
         text_frame = ttkb.Frame(container)
         text_frame.pack(fill=tk.BOTH, expand=True, pady=5)

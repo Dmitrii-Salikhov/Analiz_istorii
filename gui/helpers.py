@@ -62,7 +62,7 @@ def build_empty_state(parent, title: str, steps: list[str], load_text: str, on_l
     ).pack(pady=(0, 12))
     for i, step in enumerate(steps, start=1):
         ttkb.Label(card, text=f"{i}. {step}", font=("Calibri", 12)).pack(anchor=tk.W, pady=2)
-    ttkb.Button(card, text=load_text, command=on_load, bootstyle="info", padding=(24, 8)).pack(
+    ttkb.Button(card, text=load_text, command=on_load, bootstyle="primary", padding=(24, 8)).pack(
         pady=18
     )
     return wrap

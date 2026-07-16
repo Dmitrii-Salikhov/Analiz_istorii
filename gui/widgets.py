@@ -5,10 +5,11 @@ import sys
 import threading
 import tkinter as tk
 from tkinter import font as tkfont
-from tkinter import messagebox
 from typing import Callable, Iterable, Sequence
 
 import ttkbootstrap as ttkb
+
+from gui.chrome import notify_copied
 
 
 def wheel_steps(event) -> int:
@@ -263,7 +264,7 @@ def make_filtered_tree(
         host = clipboard_host or parent.winfo_toplevel()
         host.clipboard_clear()
         host.clipboard_append(text)
-        messagebox.showinfo("Скопировано", "Данные скопированы в буфер обмена")
+        notify_copied(host, "Скопировано")
 
     menu = tk.Menu(tree, tearoff=0)
     menu.add_command(label="Копировать выделенное", command=copy_selection)

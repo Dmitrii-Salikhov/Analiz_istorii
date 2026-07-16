@@ -15,7 +15,18 @@ from matplotlib.figure import Figure
 
 from config_store import push_recent_file, save_config
 from excel_io import ExcelParseError, MissingColumnsError, load_ksg_excel
-from gui.helpers import build_empty_state
+from gui.chrome import (
+    PRIMARY_PAD,
+    SECONDARY_PAD,
+    MonthChips,
+    SegmentControl,
+    SplitSaveButton,
+    ToolTip,
+    build_context_bar,
+    hotkey_hint,
+    notify_copied,
+)
+from gui.helpers import build_empty_state, offer_open_folder
 from gui.ui_theme import short_month_label
 from gui.widgets import ScrollableFrame, enable_file_drop, make_filtered_tree, run_with_progress
 from ksg_analysis import (
@@ -45,55 +56,70 @@ class KsgReportFrame(ttkb.Frame):
         return self._reference_status
 
     def _build_ui(self) -> None:
-        ctrl_frame = ttkb.Frame(self)
-        ctrl_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+        toolbar = ttkb.Frame(self, padding=(8, 6))
+        toolbar.pack(side=tk.TOP, fill=tk.X)
+
+        left = ttkb.Frame(toolbar)
+        left.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self.btn_load = ttkb.Button(
-            ctrl_frame,
-            text="Загрузить файлы КСГ",
+            left,
+            text="Загрузить КСГ",
             command=self.load_files,
-            bootstyle="info",
-            padding=(20, 5),
+            bootstyle="primary",
+            padding=PRIMARY_PAD,
         )
-        self.btn_load.pack(side=tk.LEFT, padx=5)
+        self.btn_load.pack(side=tk.LEFT, padx=(0, 6))
+        ToolTip(self.btn_load, f"Открыть файлы КСГ ({hotkey_hint('⌘O', 'Ctrl+O')})")
 
         self.btn_remove = ttkb.Button(
-            ctrl_frame,
-            text="Удалить выбранный",
+            left,
+            text="Удалить",
             command=self.remove_file,
-            bootstyle="danger",
+            bootstyle="danger-outline",
             state=tk.DISABLED,
-            padding=(20, 5),
+            padding=SECONDARY_PAD,
         )
-        self.btn_remove.pack(side=tk.LEFT, padx=5)
+        self.btn_remove.pack(side=tk.LEFT, padx=(0, 10))
+        ToolTip(self.btn_remove, "Удалить выбранный месяц")
 
-        ttkb.Label(ctrl_frame, text="Активный файл:", font=("Calibri", 11)).pack(
-            side=tk.LEFT, padx=(20, 5)
-        )
-        self.file_combobox = ttkb.Combobox(ctrl_frame, state="readonly", width=50)
-        self.file_combobox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttkb.Label(left, text="Активный:", font=("Calibri", 11)).pack(side=tk.LEFT, padx=(4, 4))
+        self.file_combobox = ttkb.Combobox(left, state="readonly", width=36)
+        self.file_combobox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
         self.file_combobox.bind("<<ComboboxSelected>>", self.on_file_selected)
 
+        right = ttkb.Frame(toolbar)
+        right.pack(side=tk.RIGHT)
         self.btn_copy_all = ttkb.Button(
-            ctrl_frame,
-            text="Копировать всё",
+            right,
+            text="Копировать",
             command=self.copy_all_tabs,
-            bootstyle="info",
+            bootstyle="secondary-outline",
             state=tk.DISABLED,
+            padding=SECONDARY_PAD,
         )
-        self.btn_copy_all.pack(side=tk.RIGHT, padx=5)
+        self.btn_copy_all.pack(side=tk.LEFT, padx=(0, 6))
+        ToolTip(self.btn_copy_all, f"Копировать сводку ({hotkey_hint('⌘⇧C', 'Ctrl+Shift+C')})")
 
-        self.context_frame = ttkb.Frame(self, bootstyle="secondary", padding=(8, 4))
+        self.save_split = SplitSaveButton(
+            right,
+            on_excel=self.save_report_excel,
+            on_txt=self.save_report_txt,
+            tooltip=f"Сохранить Excel ({hotkey_hint('⌘S', 'Ctrl+S')})",
+        )
+        self.save_split.pack(side=tk.LEFT)
+        self.save_split.set_enabled(False)
+
+        self.context_frame, self.context_labels = build_context_bar(
+            self,
+            [
+                ("file", "Файл"),
+                ("period", "Период"),
+                ("extra", "Пациентов"),
+                ("stat", "Сумма"),
+            ],
+        )
         self.context_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 4))
-
-        self.lbl_context_file = ttkb.Label(self.context_frame, text="Файл: —", font=("Calibri", 10))
-        self.lbl_context_file.pack(side=tk.LEFT, padx=(0, 16))
-        self.lbl_context_month = ttkb.Label(self.context_frame, text="Период: —", font=("Calibri", 10))
-        self.lbl_context_month.pack(side=tk.LEFT, padx=(0, 16))
-        self.lbl_context_patients = ttkb.Label(self.context_frame, text="Пациентов: —", font=("Calibri", 10))
-        self.lbl_context_patients.pack(side=tk.LEFT, padx=(0, 16))
-        self.lbl_context_sum = ttkb.Label(self.context_frame, text="Сумма: —", font=("Calibri", 10))
-        self.lbl_context_sum.pack(side=tk.LEFT)
 
         self.work_area = ttkb.Frame(self)
         self.work_area.pack(fill=tk.BOTH, expand=True)
@@ -116,45 +142,56 @@ class KsgReportFrame(ttkb.Frame):
         summary_outer = ttkb.Frame(self.outer_notebook)
         cases_outer = ttkb.Frame(self.outer_notebook)
         compare_outer = ttkb.Frame(self.outer_notebook)
-        export_outer = ttkb.Frame(self.outer_notebook)
 
         self.outer_notebook.add(summary_outer, text="Сводка")
         self.outer_notebook.add(cases_outer, text="Случаи и КСЛП")
         self.outer_notebook.add(compare_outer, text="Сравнение")
-        self.outer_notebook.add(export_outer, text="Экспорт")
 
-        self.summary_notebook = ttkb.Notebook(summary_outer, bootstyle="info")
-        self.summary_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-        self.cases_notebook = ttkb.Notebook(cases_outer, bootstyle="warning")
-        self.cases_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-        self.tab_frames: dict[str, ttkb.Frame] = {}
-
-        summary_tabs = [
+        # Сегментный переключатель вместо вложенного Notebook в «Сводка»
+        self.summary_host = ttkb.Frame(summary_outer)
+        self.summary_host.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.summary_pages: dict[str, ttkb.Frame] = {}
+        summary_keys = [
             ("patients", "Пациенты"),
             ("operations", "Операции"),
             ("money", "Сумма"),
             ("age_groups", "Возраст"),
             ("kz", "КЗ"),
         ]
-        for key, title in summary_tabs:
-            frame = ttkb.Frame(self.summary_notebook)
-            self.summary_notebook.add(frame, text=title)
-            self.tab_frames[key] = frame
 
-        cases_tabs = [
-            ("analysis", "Анализ случаев"),
-            ("kslp", "КСЛП"),
-        ]
-        for key, title in cases_tabs:
+        def on_summary_segment(idx: int):
+            for i, (key, _) in enumerate(summary_keys):
+                if i == idx:
+                    self.summary_pages[key].pack(fill=tk.BOTH, expand=True)
+                else:
+                    self.summary_pages[key].pack_forget()
+
+        self.summary_segment = SegmentControl(
+            self.summary_host,
+            [t for _, t in summary_keys],
+            on_change=on_summary_segment,
+        )
+        self.summary_segment.pack(side=tk.TOP, anchor=tk.W)
+
+        pages_wrap = ttkb.Frame(self.summary_host)
+        pages_wrap.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        for key, _title in summary_keys:
+            self.summary_pages[key] = ttkb.Frame(pages_wrap)
+        on_summary_segment(0)
+
+        self.cases_notebook = ttkb.Notebook(cases_outer, bootstyle="primary")
+        self.cases_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        self.tab_frames: dict[str, ttkb.Frame] = {}
+        for key, _title in summary_keys:
+            self.tab_frames[key] = self.summary_pages[key]
+
+        for key, title in (("analysis", "Анализ случаев"), ("kslp", "КСЛП")):
             frame = ttkb.Frame(self.cases_notebook)
             self.cases_notebook.add(frame, text=title)
             self.tab_frames[key] = frame
 
         self.tab_frames["compare"] = compare_outer
-        self.tab_frames["export"] = export_outer
-
         self._update_context_bar()
 
     def _show_work_content(self, has_files: bool) -> None:
@@ -295,6 +332,7 @@ class KsgReportFrame(ttkb.Frame):
             self._clear_all_tabs()
             self.btn_remove.configure(state=tk.DISABLED)
             self.btn_copy_all.configure(state=tk.DISABLED)
+            self.save_split.set_enabled(False)
             self._show_work_content(False)
             self._update_context_bar()
         else:
@@ -317,6 +355,7 @@ class KsgReportFrame(ttkb.Frame):
         self.display_all()
         self.btn_remove.configure(state=tk.NORMAL)
         self.btn_copy_all.configure(state=tk.NORMAL)
+        self.save_split.set_enabled(True)
         self._show_work_content(True)
         self._update_context_bar()
 
@@ -330,17 +369,13 @@ class KsgReportFrame(ttkb.Frame):
         if self.results and self.active_file_index >= 0:
             f = self.loaded_files[self.active_file_index]
             month = self._file_label(f)
-            self.lbl_context_file.configure(text=f"Файл: {self.file_name}")
-            self.lbl_context_month.configure(text=f"Период: {month}")
-            self.lbl_context_patients.configure(text=f"Пациентов: {self.results['total_patients']}")
-            self.lbl_context_sum.configure(
-                text=f"Сумма: {self.results['total_sum']:,.2f} руб."
-            )
+            self.context_labels["file"].configure(text=self.file_name)
+            self.context_labels["period"].configure(text=month)
+            self.context_labels["extra"].configure(text=str(self.results["total_patients"]))
+            self.context_labels["stat"].configure(text=f"{self.results['total_sum']:,.2f} руб.")
         else:
-            self.lbl_context_file.configure(text="Файл: —")
-            self.lbl_context_month.configure(text="Период: —")
-            self.lbl_context_patients.configure(text="Пациентов: —")
-            self.lbl_context_sum.configure(text="Сумма: —")
+            for key in self.context_labels:
+                self.context_labels[key].configure(text="—")
 
     def _clear_all_tabs(self) -> None:
         for key in self.tab_frames:
@@ -366,7 +401,6 @@ class KsgReportFrame(ttkb.Frame):
         self._tab_age_groups()
         self._tab_kz()
         self._tab_compare()
-        self._tab_export()
 
     def _tab_patients(self) -> None:
         frame = self.tab_frames["patients"]
@@ -500,11 +534,15 @@ class KsgReportFrame(ttkb.Frame):
             except ValueError:
                 messagebox.showerror("Ошибка", "Введите числовые значения порогов.")
 
-        ttkb.Button(frame, text="Применить пороги", command=apply_thresholds, bootstyle="warning").pack(
-            pady=5
-        )
+        ttkb.Button(
+            frame,
+            text="Применить пороги",
+            command=apply_thresholds,
+            bootstyle="primary",
+            padding=SECONDARY_PAD,
+        ).pack(pady=5)
 
-        note = ttkb.Notebook(frame, bootstyle="warning")
+        note = ttkb.Notebook(frame, bootstyle="primary")
         note.pack(fill=tk.BOTH, expand=True, pady=10)
 
         for name, df_data in [
@@ -540,13 +578,14 @@ class KsgReportFrame(ttkb.Frame):
                 text += df_data.to_string(index=False) + "\n"
             self.clipboard_clear()
             self.clipboard_append(text)
-            messagebox.showinfo("Скопировано", "Сводка скопирована в буфер обмена")
+            notify_copied(self, "Сводка скопирована")
 
         ttkb.Button(
             frame,
             text="Скопировать сводку всех случаев",
             command=copy_cases,
-            bootstyle="info",
+            bootstyle="secondary-outline",
+            padding=SECONDARY_PAD,
         ).pack(pady=5)
 
     def _tab_kslp(self) -> None:
@@ -571,7 +610,8 @@ class KsgReportFrame(ttkb.Frame):
                 scroll.scrollable_frame,
                 text="Копировать список нарушений КСЛП",
                 command=lambda: self._copy_df_as_text(r["kslp_issues"]),
-                bootstyle="info",
+                bootstyle="secondary-outline",
+                padding=SECONDARY_PAD,
             ).pack(pady=5)
         else:
             ttkb.Label(
@@ -653,42 +693,32 @@ class KsgReportFrame(ttkb.Frame):
 
         ttkb.Label(
             frame,
-            text="Выберите файлы для сравнения (до 12):",
+            text="Выберите месяцы для сравнения (до 12):",
             font=("Calibri", 14, "bold"),
-        ).pack(pady=10)
+        ).pack(pady=(10, 6), anchor=tk.W, padx=10)
 
-        sel_frame = ttkb.Frame(frame)
-        sel_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        self.compare_vars: list[tk.BooleanVar] = []
-        for f in self.loaded_files:
-            var = tk.BooleanVar(value=False)
-            self.compare_vars.append(var)
-            ttkb.Checkbutton(
-                sel_frame,
-                text=self._file_label(f),
-                variable=var,
-                bootstyle="round-toggle",
-            ).pack(anchor=tk.W)
+        labels = [self._file_label(f) for f in self.loaded_files]
+        self.month_chips = MonthChips(frame, labels, max_selected=12)
+        self.month_chips.pack(fill=tk.X, padx=10, pady=4)
 
         btn_frame = ttkb.Frame(frame)
         btn_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        def select_all():
-            for var in self.compare_vars:
-                var.set(True)
-
-        ttkb.Button(btn_frame, text="Анализировать все", command=select_all, bootstyle="secondary").pack(
-            side=tk.LEFT, padx=5
-        )
+        ttkb.Button(
+            btn_frame,
+            text="Выбрать все",
+            command=self.month_chips.select_all,
+            bootstyle="secondary-outline",
+            padding=SECONDARY_PAD,
+        ).pack(side=tk.LEFT, padx=5)
 
         def do_compare():
-            selected_indices = [i for i, var in enumerate(self.compare_vars) if var.get()]
+            selected_indices = self.month_chips.selected_indices()
             if len(selected_indices) < 2:
-                messagebox.showwarning("Сравнение", "Выберите минимум 2 файла.")
+                messagebox.showwarning("Сравнение", "Выберите минимум 2 месяца.")
                 return
             if len(selected_indices) > 12:
-                messagebox.showwarning("Сравнение", "Можно выбрать не более 12 файлов.")
+                messagebox.showwarning("Сравнение", "Можно выбрать не более 12 месяцев.")
                 return
             self._show_comparison(selected_indices)
 
@@ -697,6 +727,7 @@ class KsgReportFrame(ttkb.Frame):
             text="Построить сравнение",
             command=do_compare,
             bootstyle="success",
+            padding=PRIMARY_PAD,
         ).pack(side=tk.LEFT, padx=5)
 
         self.compare_result_frame = ScrollableFrame(frame)
@@ -751,10 +782,14 @@ class KsgReportFrame(ttkb.Frame):
         def copy_table1():
             self.clipboard_clear()
             self.clipboard_append(df_tbl1.to_string(index=False))
-            messagebox.showinfo("Скопировано", "Таблица общих показателей скопирована в буфер обмена")
+            notify_copied(self, "Таблица скопирована")
 
         ttkb.Button(
-            table_frame1, text="Копировать таблицу", command=copy_table1, bootstyle="secondary"
+            table_frame1,
+            text="Копировать таблицу",
+            command=copy_table1,
+            bootstyle="secondary-outline",
+            padding=SECONDARY_PAD,
         ).pack(pady=2)
 
         all_doctors = summary["doctors"]
@@ -793,10 +828,14 @@ class KsgReportFrame(ttkb.Frame):
             def copy_table2():
                 self.clipboard_clear()
                 self.clipboard_append(df_tbl2.to_string(index=False))
-                messagebox.showinfo("Скопировано", "Таблица по врачам скопирована в буфер обмена")
+                notify_copied(self, "Таблица скопирована")
 
             ttkb.Button(
-                table_frame2, text="Копировать таблицу", command=copy_table2, bootstyle="secondary"
+                table_frame2,
+                text="Копировать таблицу",
+                command=copy_table2,
+                bootstyle="secondary-outline",
+                padding=SECONDARY_PAD,
             ).pack(pady=2)
 
         graph_frame = ttkb.Labelframe(
@@ -875,21 +914,11 @@ class KsgReportFrame(ttkb.Frame):
             bootstyle="secondary",
         ).pack(pady=5)
 
-    def _tab_export(self) -> None:
-        frame = self.tab_frames["export"]
-        ttkb.Label(frame, text="Экспорт отчёта КСГ", font=("Calibri", 14, "bold")).pack(pady=10)
-        ttkb.Button(frame, text="Сохранить TXT", command=self.save_report_txt, bootstyle="success").pack(
-            pady=5
-        )
-        ttkb.Button(
-            frame, text="Сохранить Excel", command=self.save_report_excel, bootstyle="warning"
-        ).pack(pady=5)
-
     def _copy_df_as_text(self, df: pd.DataFrame) -> None:
         text = df.to_string(index=False)
         self.clipboard_clear()
         self.clipboard_append(text)
-        messagebox.showinfo("Скопировано", "Таблица скопирована в буфер обмена")
+        notify_copied(self, "Таблица скопирована")
 
     def copy_all_tabs(self) -> None:
         if not self.results:
@@ -922,7 +951,7 @@ class KsgReportFrame(ttkb.Frame):
         )
         self.clipboard_clear()
         self.clipboard_append("\n".join(parts))
-        messagebox.showinfo("Скопировано", "Все данные КСГ скопированы в буфер обмена.")
+        notify_copied(self, "Данные КСГ скопированы")
 
     def _auto_adjust_excel_columns(self, writer, sheet_name: str, df: pd.DataFrame, index: bool = False) -> None:
         worksheet = writer.sheets[sheet_name]
@@ -980,7 +1009,7 @@ class KsgReportFrame(ttkb.Frame):
             f.write("Средний КЗ:\n")
             f.write(r["avg_kz_doctor"].to_string(index=False) + "\n")
             f.write(f"Средний по отделению: {r['avg_kz_total']}\n")
-        messagebox.showinfo("Сохранено", f"Отчёт сохранён в {file_path}")
+        offer_open_folder(file_path)
 
     def save_report_excel(self) -> None:
         if not self.results:
@@ -1020,4 +1049,4 @@ class KsgReportFrame(ttkb.Frame):
                 self._auto_adjust_excel_columns(writer, "КСЛП нарушения", r["kslp_issues"])
             r["avg_kz_doctor"].to_excel(writer, sheet_name="Средний КЗ", index=False)
             self._auto_adjust_excel_columns(writer, "Средний КЗ", r["avg_kz_doctor"])
-        messagebox.showinfo("Сохранено", f"Отчёт сохранён в {file_path}")
+        offer_open_folder(file_path)
