@@ -664,25 +664,6 @@ class LorReportFrame(ttkb.Frame):
             self.clipboard_append(full_text)
             notify_copied(self, "Нарушения скопированы")
 
-        ttkb.Button(
-            top_frame,
-            text="Копировать всё",
-            command=copy_all,
-            bootstyle="secondary-outline",
-            padding=SECONDARY_PAD,
-        ).pack(side=tk.LEFT, padx=5)
-
-        check_frame = ttkb.Labelframe(top_frame, text="Выберите категории для копирования", padding=5)
-        check_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10)
-
-        check_vars: list[tuple[str, tk.BooleanVar]] = []
-        for title, _ in all_sections:
-            var = tk.BooleanVar(value=True)
-            check_vars.append((title, var))
-            ttkb.Checkbutton(check_frame, text=title, variable=var, bootstyle="round-toggle").pack(
-                side=tk.LEFT, padx=5
-            )
-
         def copy_selected():
             selected_blocks = [
                 block for (_, var), (_, block) in zip(check_vars, all_sections) if var.get()
@@ -694,13 +675,39 @@ class LorReportFrame(ttkb.Frame):
             else:
                 messagebox.showwarning("Нет выбора", "Не выбрано ни одной категории.")
 
+        # Кнопки всегда на своей строке — не уезжают за край при многих категориях
+        btn_row = ttkb.Frame(top_frame)
+        btn_row.pack(fill=tk.X, pady=(0, 4))
         ttkb.Button(
-            top_frame,
+            btn_row,
+            text="Копировать всё",
+            command=copy_all,
+            bootstyle="secondary-outline",
+            padding=SECONDARY_PAD,
+        ).pack(side=tk.LEFT, padx=5)
+        ttkb.Button(
+            btn_row,
             text="Копировать выбранные",
             command=copy_selected,
             bootstyle="secondary",
             padding=SECONDARY_PAD,
         ).pack(side=tk.LEFT, padx=5)
+
+        check_frame = ttkb.Labelframe(
+            top_frame, text="Выберите категории для копирования", padding=5
+        )
+        check_frame.pack(fill=tk.X, padx=5)
+
+        check_vars: list[tuple[str, tk.BooleanVar]] = []
+        cols = 3
+        for i, (title, _) in enumerate(all_sections):
+            var = tk.BooleanVar(value=True)
+            check_vars.append((title, var))
+            ttkb.Checkbutton(
+                check_frame, text=title, variable=var, bootstyle="round-toggle"
+            ).grid(row=i // cols, column=i % cols, sticky=tk.W, padx=6, pady=2)
+        for c in range(cols):
+            check_frame.columnconfigure(c, weight=1)
 
         text_frame = ttkb.Frame(container)
         text_frame.pack(fill=tk.BOTH, expand=True, pady=5)
