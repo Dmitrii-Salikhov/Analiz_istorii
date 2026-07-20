@@ -15,7 +15,23 @@ SECONDARY_PAD = (12, 6)
 def hotkey_hint(mac: str, win: str | None = None) -> str:
     if sys.platform == "darwin":
         return mac
-    return win or mac.replace("⌘", "Ctrl+")
+    return win or mac.replace("⌘", "Ctrl+").replace("⇧", "Shift+")
+
+
+def copy_selection_hint() -> str:
+    return f"Копировать выделенное ({hotkey_hint('⌘C', 'Ctrl+C')})"
+
+
+def copy_summary_hint() -> str:
+    return f"Копировать сводку ({hotkey_hint('⌘⇧C', 'Ctrl+Shift+C')})"
+
+
+def copy_button_tooltip() -> str:
+    """Подсказка для кнопки «Копировать» на панели."""
+    return (
+        f"{copy_summary_hint()}\n"
+        f"В таблице или тексте: {copy_selection_hint()}"
+    )
 
 
 class ToolTip:

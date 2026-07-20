@@ -31,6 +31,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "recent_emk": [],
     "recent_ksg": [],
     "last_main_tab": 0,
+    "last_seen_version": None,
+    "pending_update_from": None,
 }
 
 
@@ -52,6 +54,7 @@ def load_config() -> dict[str, Any]:
     cfg.setdefault("recent_emk", [])
     cfg.setdefault("recent_ksg", [])
     cfg.setdefault("last_main_tab", 0)
+    cfg.setdefault("last_seen_version", None)
     return cfg
 
 

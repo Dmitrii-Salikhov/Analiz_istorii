@@ -27,6 +27,8 @@ from gui.chrome import (
     SplitSaveButton,
     ToolTip,
     build_context_bar,
+    copy_button_tooltip,
+    copy_selection_hint,
     export_sections_dialog,
     hotkey_hint,
     make_kpi_card,
@@ -105,7 +107,7 @@ class LorReportFrame(ttkb.Frame):
             padding=SECONDARY_PAD,
         )
         self.btn_copy.pack(side=tk.LEFT, padx=(0, 6))
-        ToolTip(self.btn_copy, f"Копировать показатели ({hotkey_hint('⌘⇧C', 'Ctrl+Shift+C')})")
+        ToolTip(self.btn_copy, copy_button_tooltip())
 
         self.save_split = SplitSaveButton(
             right,
@@ -302,13 +304,15 @@ class LorReportFrame(ttkb.Frame):
 
         metrics_bar = ttkb.Frame(main_frame)
         metrics_bar.pack(fill=tk.X, pady=(0, 4))
-        ttkb.Button(
+        btn_metrics = ttkb.Button(
             metrics_bar,
             text="Копировать показатели",
             command=self._copy_main_metrics,
             bootstyle="secondary-outline",
             padding=SECONDARY_PAD,
-        ).pack(side=tk.RIGHT)
+        )
+        btn_metrics.pack(side=tk.RIGHT)
+        ToolTip(btn_metrics, copy_button_tooltip())
 
         metrics_frame = ttkb.Frame(main_frame)
         metrics_frame.pack(fill=tk.X, pady=5)
@@ -685,13 +689,19 @@ class LorReportFrame(ttkb.Frame):
             bootstyle="secondary-outline",
             padding=SECONDARY_PAD,
         ).pack(side=tk.LEFT, padx=5)
-        ttkb.Button(
+        btn_sel = ttkb.Button(
             btn_row,
             text="Копировать выбранные",
             command=copy_selected,
             bootstyle="secondary",
             padding=SECONDARY_PAD,
-        ).pack(side=tk.LEFT, padx=5)
+        )
+        btn_sel.pack(side=tk.LEFT, padx=5)
+        ToolTip(
+            btn_sel,
+            f"Копировать отмеченные категории\n"
+            f"Выделенный текст ниже: {copy_selection_hint()}",
+        )
 
         check_frame = ttkb.Labelframe(
             top_frame, text="Выберите категории для копирования", padding=5

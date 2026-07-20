@@ -23,6 +23,8 @@ from gui.chrome import (
     SplitSaveButton,
     ToolTip,
     build_context_bar,
+    copy_button_tooltip,
+    copy_selection_hint,
     hotkey_hint,
     notify_copied,
 )
@@ -99,7 +101,7 @@ class KsgReportFrame(ttkb.Frame):
             padding=SECONDARY_PAD,
         )
         self.btn_copy_all.pack(side=tk.LEFT, padx=(0, 6))
-        ToolTip(self.btn_copy_all, f"Копировать сводку ({hotkey_hint('⌘⇧C', 'Ctrl+Shift+C')})")
+        ToolTip(self.btn_copy_all, copy_button_tooltip())
 
         self.save_split = SplitSaveButton(
             right,
@@ -606,13 +608,15 @@ class KsgReportFrame(ttkb.Frame):
                 copy_df=r["kslp_issues"],
                 on_copy_df=self._copy_df_as_text,
             )
-            ttkb.Button(
+            btn_kslp = ttkb.Button(
                 scroll.scrollable_frame,
                 text="Копировать список нарушений КСЛП",
                 command=lambda: self._copy_df_as_text(r["kslp_issues"]),
                 bootstyle="secondary-outline",
                 padding=SECONDARY_PAD,
-            ).pack(pady=5)
+            )
+            btn_kslp.pack(pady=5)
+            ToolTip(btn_kslp, f"Копировать весь список\n{copy_selection_hint()}")
         else:
             ttkb.Label(
                 scroll.scrollable_frame,
@@ -784,13 +788,15 @@ class KsgReportFrame(ttkb.Frame):
             self.clipboard_append(df_tbl1.to_string(index=False))
             notify_copied(self, "Таблица скопирована")
 
-        ttkb.Button(
+        btn_t1 = ttkb.Button(
             table_frame1,
             text="Копировать таблицу",
             command=copy_table1,
             bootstyle="secondary-outline",
             padding=SECONDARY_PAD,
-        ).pack(pady=2)
+        )
+        btn_t1.pack(pady=2)
+        ToolTip(btn_t1, f"Копировать таблицу\n{copy_selection_hint()}")
 
         all_doctors = summary["doctors"]
         if all_doctors:
@@ -830,13 +836,15 @@ class KsgReportFrame(ttkb.Frame):
                 self.clipboard_append(df_tbl2.to_string(index=False))
                 notify_copied(self, "Таблица скопирована")
 
-            ttkb.Button(
+            btn_t2 = ttkb.Button(
                 table_frame2,
                 text="Копировать таблицу",
                 command=copy_table2,
                 bootstyle="secondary-outline",
                 padding=SECONDARY_PAD,
-            ).pack(pady=2)
+            )
+            btn_t2.pack(pady=2)
+            ToolTip(btn_t2, f"Копировать таблицу\n{copy_selection_hint()}")
 
         graph_frame = ttkb.Labelframe(
             self.compare_result_frame.scrollable_frame, text="Динамика показателей", padding=10

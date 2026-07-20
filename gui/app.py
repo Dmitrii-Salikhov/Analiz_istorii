@@ -16,9 +16,10 @@ from gui.ksg_frame import KsgReportFrame
 from gui.lor_frame import LorReportFrame
 from gui.settings_dialog import SettingsDialog
 from gui.ui_theme import LIGHT_THEME, is_dark_theme, toggle_theme_name
-from gui.widgets import ScrollableFrame, wheel_steps
+from gui.whats_new import show_whats_new
+from gui.widgets import ScrollableFrame, copy_from_focused_widget, wheel_steps
 from paths import get_base_dir
-from updater import check_for_updates, read_current_version
+from updater import check_for_updates, parse_version, read_current_version
 
 LOG_FILE = "errors.log"
 
@@ -113,6 +114,8 @@ class App(ttkb.Window):
         self.bind_all("<Button-4>", self._global_mousewheel, add="+")
         self.bind_all("<Button-5>", self._global_mousewheel, add="+")
 
+        self.after(200, self._maybe_show_whats_new)
+
         if self.app_settings.get("check_updates_on_start", True):
             repo = self.app_settings.get("github_repo", "")
             if repo:
@@ -121,6 +124,36 @@ class App(ttkb.Window):
                     args=(repo,),
                     daemon=True,
                 ).start()
+
+    def _maybe_show_whats_new(self, force: bool = False) -> None:
+        current = self.current_version
+        pending_from = self.app_settings.pop("pending_update_from", None)
+        previous = pending_from or self.app_settings.get("last_seen_version")
+
+        if force:
+            show_whats_new(self, current, previous, force=True)
+            self.app_settings["last_seen_version"] = current
+            self.app_settings.pop("pending_update_from", None)
+            save_config(self.app_settings)
+            return
+
+        if pending_from is not None:
+            show_whats_new(self, current, pending_from, force=False)
+            self.app_settings["last_seen_version"] = current
+            save_config(self.app_settings)
+            return
+
+        last_seen = self.app_settings.get("last_seen_version")
+        if last_seen is None:
+            # Первый запуск или миграция: не показываем весь changelog
+            self.app_settings["last_seen_version"] = current
+            save_config(self.app_settings)
+            return
+
+        if parse_version(last_seen) < parse_version(current):
+            show_whats_new(self, current, last_seen, force=False)
+            self.app_settings["last_seen_version"] = current
+            save_config(self.app_settings)
 
     def _theme_button_label(self) -> str:
         return "Светлая тема" if is_dark_theme(self.app_settings.get("theme", "")) else "Тёмная тема"
@@ -152,6 +185,8 @@ class App(ttkb.Window):
             ("<Control-o>", self._hotkey_open),
             ("<Command-s>", self._hotkey_save),
             ("<Control-s>", self._hotkey_save),
+            ("<Command-c>", self._hotkey_copy_selection),
+            ("<Control-c>", self._hotkey_copy_selection),
             ("<Command-Shift-c>", self._hotkey_copy),
             ("<Control-Shift-c>", self._hotkey_copy),
         ):
@@ -168,6 +203,12 @@ class App(ttkb.Window):
         if hasattr(frame, "hotkey_save"):
             frame.hotkey_save()
         return "break"
+
+    def _hotkey_copy_selection(self, _event=None):
+        """⌘C / Ctrl+C — копировать выделенное в таблице или тексте."""
+        if copy_from_focused_widget(self):
+            return "break"
+        return None
 
     def _hotkey_copy(self, _event=None):
         frame = self._active_work_frame()
@@ -230,6 +271,19 @@ class App(ttkb.Window):
         self.file_menu.add_command(label="Выход", command=self.on_close)
         menubar.add_cascade(label="Файл", menu=self.file_menu)
 
+        edit_menu = tk.Menu(menubar, tearoff=0)
+        edit_menu.add_command(
+            label="Копировать выделенное",
+            command=self._hotkey_copy_selection,
+            accelerator="⌘C" if sys.platform == "darwin" else "Ctrl+C",
+        )
+        edit_menu.add_command(
+            label="Копировать сводку",
+            command=self._hotkey_copy,
+            accelerator="⌘⇧C" if sys.platform == "darwin" else "Ctrl+Shift+C",
+        )
+        menubar.add_cascade(label="Правка", menu=edit_menu)
+
         settings_menu = tk.Menu(menubar, tearoff=0)
         settings_menu.add_command(label="Все настройки…", command=self.open_settings)
         settings_menu.add_command(label="Переключить тему", command=self.toggle_theme)
@@ -252,6 +306,10 @@ class App(ttkb.Window):
         menubar.add_cascade(label="Настройки", menu=settings_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu.add_command(
+            label="Что нового…",
+            command=lambda: self._maybe_show_whats_new(force=True),
+        )
         help_menu.add_command(label="О программе", command=self.show_about)
         menubar.add_cascade(label="Справка", menu=help_menu)
 
@@ -330,7 +388,7 @@ class App(ttkb.Window):
             "ЭМК и КСГ: отчёты, нарушения, сравнение месяцев\n"
             f"Версия {version}\n"
             "Горячие клавиши: ⌘/Ctrl+O открыть, ⌘/Ctrl+S сохранить,\n"
-            "⌘/Ctrl+Shift+C копировать сводку\n"
+            "⌘/Ctrl+C копировать выделенное, ⌘/Ctrl+Shift+C — сводку\n"
             "© 2026",
         )
 

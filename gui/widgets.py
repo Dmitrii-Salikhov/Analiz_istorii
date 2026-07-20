@@ -9,7 +9,74 @@ from typing import Callable, Iterable, Sequence
 
 import ttkbootstrap as ttkb
 
-from gui.chrome import notify_copied
+from gui.chrome import ToolTip, copy_selection_hint, hotkey_hint, notify_copied
+
+
+def copy_to_clipboard(host, text: str, toast: str = "Скопировано") -> bool:
+    """Копирует текст в буфер обмена и показывает toast."""
+    if text is None:
+        return False
+    content = str(text)
+    if content == "":
+        return False
+    try:
+        host.clipboard_clear()
+        host.clipboard_append(content)
+        host.update_idletasks()
+    except tk.TclError:
+        return False
+    notify_copied(host, toast)
+    return True
+
+
+def copy_from_focused_widget(root) -> bool:
+    """
+    Копирует выделенное из Treeview / Text / Listbox под фокусом.
+    Для Entry / Combobox возвращает False — оставляем стандартное поведение ОС.
+    """
+    try:
+        widget = root.focus_get()
+    except tk.TclError:
+        widget = None
+    if widget is None:
+        return False
+
+    cls = widget.winfo_class()
+    if cls in ("Entry", "TEntry", "TCombobox", "Combobox"):
+        return False
+
+    if cls == "Text":
+        try:
+            text = widget.get(tk.SEL_FIRST, tk.SEL_LAST)
+        except tk.TclError:
+            # Нет выделения — копируем весь текст (удобно для отключённых превью)
+            try:
+                text = widget.get("1.0", tk.END).rstrip("\n")
+            except tk.TclError:
+                return False
+        return copy_to_clipboard(root, text)
+
+    if cls == "Treeview":
+        selected = widget.selection()
+        if not selected:
+            return False
+        lines = []
+        for iid in selected:
+            values = widget.item(iid).get("values") or ()
+            lines.append("\t".join(str(v) for v in values))
+        return copy_to_clipboard(root, "\n".join(lines))
+
+    if cls == "Listbox":
+        try:
+            idxs = widget.curselection()
+            if not idxs:
+                return False
+            lines = [widget.get(i) for i in idxs]
+            return copy_to_clipboard(root, "\n".join(str(x) for x in lines))
+        except tk.TclError:
+            return False
+
+    return False
 
 
 def wheel_steps(event) -> int:
@@ -188,12 +255,23 @@ def make_filtered_tree(
     filter_entry.insert(0, "Поиск...")
 
     if copy_df is not None and on_copy_df is not None:
-        ttkb.Button(
+        btn_copy_table = ttkb.Button(
             top_bar,
             text="Копировать таблицу",
             command=lambda: on_copy_df(copy_df),
             bootstyle="secondary",
-        ).pack(side=tk.RIGHT)
+        )
+        btn_copy_table.pack(side=tk.RIGHT)
+        ToolTip(
+            btn_copy_table,
+            f"Копировать всю таблицу\nВыделенные строки: {copy_selection_hint()}",
+        )
+
+    # Подсказка у поиска
+    ToolTip(
+        filter_entry,
+        f"Поиск по таблице\n{copy_selection_hint()} — выделенные строки",
+    )
 
     tree_frame = ttkb.Frame(frame)
     tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -257,20 +335,21 @@ def make_filtered_tree(
         selected = tree.selection()
         if not selected:
             return
-        values = tree.item(selected[0])["values"]
-        if not values:
-            return
-        text = "\t".join(str(v) for v in values)
+        lines = []
+        for iid in selected:
+            values = tree.item(iid).get("values") or ()
+            lines.append("\t".join(str(v) for v in values))
         host = clipboard_host or parent.winfo_toplevel()
-        host.clipboard_clear()
-        host.clipboard_append(text)
-        notify_copied(host, "Скопировано")
+        copy_to_clipboard(host, "\n".join(lines))
 
     menu = tk.Menu(tree, tearoff=0)
-    menu.add_command(label="Копировать выделенное", command=copy_selection)
+    menu.add_command(
+        label=f"Копировать выделенное ({hotkey_hint('⌘C', 'Ctrl+C')})",
+        command=copy_selection,
+    )
     tree.bind("<Button-3>", lambda e: menu.post(e.x_root, e.y_root))
-    tree.bind("<Command-c>", lambda e: copy_selection())
-    tree.bind("<Control-c>", lambda e: copy_selection())
+    tree.bind("<Command-c>", lambda e: (copy_selection(), "break")[1])
+    tree.bind("<Control-c>", lambda e: (copy_selection(), "break")[1])
     return tree
 
 

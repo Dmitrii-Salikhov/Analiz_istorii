@@ -79,6 +79,9 @@ jobs:
             --hidden-import gui.widgets `
             --hidden-import gui.helpers `
             --hidden-import gui.ui_theme `
+            --hidden-import gui.chrome `
+            --hidden-import gui.whats_new `
+            --hidden-import changelog `
             --hidden-import updater `
             --hidden-import config_store `
             --hidden-import excel_io `

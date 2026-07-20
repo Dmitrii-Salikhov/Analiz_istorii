@@ -244,6 +244,15 @@ def perform_update(repo: str, release=None) -> None:
         _log(f"SHA-256 OK: {actual}")
 
         app_dir = get_base_dir()
+        try:
+            from config_store import load_config, save_config
+
+            cfg = load_config()
+            cfg["pending_update_from"] = read_current_version()
+            save_config(cfg)
+        except Exception as e:
+            _log(f"Не удалось записать pending_update_from: {e}")
+
         if sys.platform == "win32" and getattr(sys, "frozen", False):
             progress_win.destroy()
             _launch_windows_frozen_update(app_dir, zip_path, sha_path)
