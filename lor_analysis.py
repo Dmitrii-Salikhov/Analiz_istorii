@@ -80,6 +80,91 @@ def age_group(age) -> str:
     return "65+ лет"
 
 
+def parse_hir_operations(text) -> list[tuple[str, str]]:
+    """Разбирает «Хир. активность (операции)» → [(код, наименование), ...]."""
+    if pd.isna(text):
+        return []
+    raw = str(text).strip()
+    if not raw or raw.lower() in ("nan", "none", "-"):
+        return []
+    result: list[tuple[str, str]] = []
+    for part in raw.split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        tokens = part.split(None, 1)
+        code = tokens[0].strip()
+        name = tokens[1].strip() if len(tokens) > 1 else ""
+        if code:
+            result.append((code, name))
+    return result
+
+
+def format_hir_operations_short(text) -> str:
+    """Краткая строка кодов/названий для таблицы."""
+    ops = parse_hir_operations(text)
+    if not ops:
+        return "—"
+    return "; ".join(code if not name else f"{code} {name}" for code, name in ops)
+
+
+def build_skp_tables(prepared: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, int, int]:
+    """
+    СКП — стационар краткосрочного пребывания: койко-дни 0 или 1 (сырое значение).
+    Возвращает (список случаев, сводка по кодам, count_0, count_1).
+    """
+    days = prepared["Койко-дни"]
+    skp = prepared[days.isin([0, 1])].copy()
+    count_0 = int((days == 0).sum())
+    count_1 = int((days == 1).sum())
+
+    empty_cases = pd.DataFrame(
+        columns=["КВС", "Койко-дни", "Тип", "Врач", "Операции", "Кол-во операций"]
+    )
+    empty_ops = pd.DataFrame(
+        columns=["Код услуги", "Наименование", "Количество случаев СКП"]
+    )
+    if skp.empty:
+        return empty_cases, empty_ops, count_0, count_1
+
+    ops_col = "Хир. активность (операции)"
+    cases = pd.DataFrame(
+        {
+            "КВС": skp["Номер КВС"].astype(str),
+            "Койко-дни": skp["Койко-дни"].astype(int),
+            "Тип": skp["Тип госпитализации"].astype(str),
+            "Врач": skp["Лечащий врач"].map(format_doctor_name),
+            "Операции": skp[ops_col].map(format_hir_operations_short),
+            "Кол-во операций": skp["Хир_кол"].astype(int),
+        }
+    ).reset_index(drop=True)
+
+    op_rows: list[dict] = []
+    for _, row in skp.iterrows():
+        seen: set[str] = set()
+        for code, name in parse_hir_operations(row.get(ops_col)):
+            if code in seen:
+                continue
+            seen.add(code)
+            op_rows.append(
+                {"Код услуги": code, "Наименование": name, "КВС": row["Номер КВС"]}
+            )
+
+    if op_rows:
+        ops_df = pd.DataFrame(op_rows)
+        ops_summary = (
+            ops_df.groupby(["Код услуги", "Наименование"], dropna=False)
+            .size()
+            .reset_index(name="Количество случаев СКП")
+            .sort_values(by="Количество случаев СКП", ascending=False)
+            .reset_index(drop=True)
+        )
+    else:
+        ops_summary = empty_ops
+
+    return cases, ops_summary, count_0, count_1
+
+
 def prepare_lor_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["Возраст"] = pd.to_numeric(
@@ -96,6 +181,9 @@ def prepare_lor_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     out["Хир_прот"] = (
         pd.to_numeric(out["Хир. активность (протоколы)"], errors="coerce").fillna(0).astype(int)
     )
+    ops_col = "Хир. активность (операции)"
+    if ops_col not in out.columns:
+        out[ops_col] = ""
     out["Лекарства"] = pd.to_numeric(
         out["Наличие оформленных лекарственных назначений в указанном движении"],
         errors="coerce",
@@ -136,6 +224,11 @@ class LorAnalysisResult:
     df: pd.DataFrame
     period_start: date | None = None
     period_end: date | None = None
+    skp_count: int = 0
+    skp_days_0: int = 0
+    skp_days_1: int = 0
+    skp_cases: pd.DataFrame | None = None
+    skp_operations: pd.DataFrame | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -151,6 +244,11 @@ class LorAnalysisResult:
             "df": self.df,
             "period_start": self.period_start,
             "period_end": self.period_end,
+            "skp_count": self.skp_count,
+            "skp_days_0": self.skp_days_0,
+            "skp_days_1": self.skp_days_1,
+            "skp_cases": self.skp_cases,
+            "skp_operations": self.skp_operations,
         }
 
 
@@ -162,6 +260,7 @@ def analyze_lor(df: pd.DataFrame) -> LorAnalysisResult:
         columns=["КВС", "возраст", "тип госпитализации", "врач", "тип_нарушения", "нарушение"]
     )
     if total == 0:
+        empty_skp_cases, empty_skp_ops, _, _ = build_skp_tables(prepared)
         return LorAnalysisResult(
             total_patients=0,
             avg_beddays=0.0,
@@ -175,6 +274,11 @@ def analyze_lor(df: pd.DataFrame) -> LorAnalysisResult:
             df=prepared,
             period_start=period_start,
             period_end=period_end,
+            skp_count=0,
+            skp_days_0=0,
+            skp_days_1=0,
+            skp_cases=empty_skp_cases,
+            skp_operations=empty_skp_ops,
         )
 
     avg_beddays = float(prepared["Койко-дни_скор"].sum() / total)
@@ -304,6 +408,8 @@ def analyze_lor(df: pd.DataFrame) -> LorAnalysisResult:
     else:
         ids_stats = pd.DataFrame(columns=["врач", "нарушения по ИДС"])
 
+    skp_cases, skp_operations, skp_days_0, skp_days_1 = build_skp_tables(prepared)
+
     return LorAnalysisResult(
         total_patients=total,
         avg_beddays=avg_beddays,
@@ -317,4 +423,9 @@ def analyze_lor(df: pd.DataFrame) -> LorAnalysisResult:
         df=prepared,
         period_start=period_start,
         period_end=period_end,
+        skp_count=skp_days_0 + skp_days_1,
+        skp_days_0=skp_days_0,
+        skp_days_1=skp_days_1,
+        skp_cases=skp_cases,
+        skp_operations=skp_operations,
     )

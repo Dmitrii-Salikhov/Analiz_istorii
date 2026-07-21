@@ -24,6 +24,7 @@ from excel_io import (
 from gui.chrome import (
     PRIMARY_PAD,
     SECONDARY_PAD,
+    SegmentControl,
     SplitSaveButton,
     ToolTip,
     build_context_bar,
@@ -64,6 +65,7 @@ class LorReportFrame(ttkb.Frame):
             "Сводка по врачам": tk.BooleanVar(value=True),
             "ИДС по врачам": tk.BooleanVar(value=True),
             "Длительные госпитализации": tk.BooleanVar(value=True),
+            "СКП": tk.BooleanVar(value=True),
             "Метаданные": tk.BooleanVar(value=True),
         }
 
@@ -149,10 +151,12 @@ class LorReportFrame(ttkb.Frame):
 
         self.main_tab = ttkb.Frame(self.notebook)
         self.viol_main_tab = ttkb.Frame(self.notebook)
+        self.skp_tab = ttkb.Frame(self.notebook)
         self.doctors_tab = ttkb.Frame(self.notebook)
 
         self.notebook.add(self.main_tab, text="Основные показатели")
         self.notebook.add(self.viol_main_tab, text="Нарушения")
+        self.notebook.add(self.skp_tab, text="СКП")
         self.notebook.add(self.doctors_tab, text="Сводка по врачам")
 
         self.viol_notebook = ttkb.Notebook(self.viol_main_tab, bootstyle="primary")
@@ -282,13 +286,14 @@ class LorReportFrame(ttkb.Frame):
         self.context_labels["stat"].configure(text=count)
 
     def _clear_all_tabs(self) -> None:
-        for tab in [self.main_tab, self.viol_cat_tab, self.viol_all_tab, self.doctors_tab]:
+        for tab in [self.main_tab, self.viol_cat_tab, self.viol_all_tab, self.skp_tab, self.doctors_tab]:
             for widget in tab.winfo_children():
                 widget.destroy()
 
     def display_results(self) -> None:
         self._create_main_tab()
         self._create_violations_tabs()
+        self._create_skp_tab()
         self._create_doctors_tab()
 
     def _create_main_tab(self) -> None:
@@ -317,12 +322,18 @@ class LorReportFrame(ttkb.Frame):
         metrics_frame = ttkb.Frame(main_frame)
         metrics_frame.pack(fill=tk.X, pady=5)
         viol_tab = 1
+        skp_tab = 2
         for i, (label, value, tab_index) in enumerate(
             [
                 ("Всего пациентов", str(r.total_patients), 0),
                 ("Средний койко-день", f"{r.avg_beddays:.2f}", viol_tab),
-                ("Экстренные госпитализации", str(r.urgent), viol_tab),
-                ("Плановые госпитализации", str(r.planned), viol_tab),
+                ("Экстренные", str(r.urgent), viol_tab),
+                ("Плановые", str(r.planned), viol_tab),
+                (
+                    "СКП (0–1 к/д)",
+                    str(r.skp_count),
+                    skp_tab,
+                ),
             ]
         ):
             card = make_kpi_card(
@@ -331,8 +342,21 @@ class LorReportFrame(ttkb.Frame):
                 value,
                 on_click=lambda idx=tab_index: self.notebook.select(idx),
             )
-            card.grid(row=0, column=i, padx=8, pady=5, sticky="nsew")
+            card.grid(row=0, column=i, padx=6, pady=5, sticky="nsew")
             metrics_frame.columnconfigure(i, weight=1)
+
+        if r.skp_count:
+            skp_hint = ttkb.Label(
+                main_frame,
+                text=(
+                    f"СКП — стационар краткосрочного пребывания: "
+                    f"{r.skp_days_0} с 0 к/д, {r.skp_days_1} с 1 к/д"
+                ),
+                font=("Calibri", 11),
+                bootstyle="secondary",
+            )
+            skp_hint.pack(anchor=tk.W, pady=(0, 6))
+            self._bind_click_nav(skp_hint, skp_tab)
 
         share_df = violation_share_table(r.violations_df)
         if not share_df.empty:
@@ -446,6 +470,12 @@ class LorReportFrame(ttkb.Frame):
                 f"Длительные госпитализации (>7 дней) как индикатор – {len(r.long_stay)} случаев "
                 "(не влияют на рейтинг врача).\n",
             )
+        if r.skp_count:
+            note_text.insert(
+                tk.END,
+                f"СКП (0–1 койко-день): {r.skp_count} историй "
+                f"(0 дн. — {r.skp_days_0}, 1 дн. — {r.skp_days_1}).\n",
+            )
         note_text.insert(
             tk.END,
             "Рекомендации: усилить контроль за оформлением ИДС, дневников и эпикризов.",
@@ -476,6 +506,7 @@ class LorReportFrame(ttkb.Frame):
                 f"Средний койко-день: {r.avg_beddays:.2f}",
                 f"Экстренные госпитализации: {r.urgent}",
                 f"Плановые госпитализации: {r.planned}",
+                f"СКП (0–1 к/д): {r.skp_count} (0 дн.: {r.skp_days_0}, 1 дн.: {r.skp_days_1})",
             ]
         )
         share_df = violation_share_table(r.violations_df)
@@ -755,6 +786,99 @@ class LorReportFrame(ttkb.Frame):
         except tk.TclError:
             pass
 
+    def _create_skp_tab(self) -> None:
+        for w in self.skp_tab.winfo_children():
+            w.destroy()
+        if not self.analysis:
+            return
+        r = self.analysis
+
+        header = ttkb.Frame(self.skp_tab, padding=(10, 8))
+        header.pack(fill=tk.X)
+        ttkb.Label(
+            header,
+            text="СКП — стационар краткосрочного пребывания",
+            font=("Calibri", 14, "bold"),
+            bootstyle="primary",
+        ).pack(anchor=tk.W)
+        ttkb.Label(
+            header,
+            text=(
+                f"Истории с 0 или 1 койко-днём: {r.skp_count} "
+                f"(0 дн. — {r.skp_days_0}, 1 дн. — {r.skp_days_1})"
+            ),
+            font=("Calibri", 11),
+            bootstyle="secondary",
+        ).pack(anchor=tk.W, pady=(2, 0))
+
+        page_cases = ttkb.Frame(self.skp_tab)
+        page_ops = ttkb.Frame(self.skp_tab)
+
+        def on_segment(idx: int):
+            page_cases.pack_forget()
+            page_ops.pack_forget()
+            (page_cases if idx == 0 else page_ops).pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        SegmentControl(
+            self.skp_tab,
+            ["Список историй", "Коды услуг / операции"],
+            on_change=on_segment,
+        ).pack(side=tk.TOP, anchor=tk.W, padx=10, pady=(0, 4))
+
+        cases = r.skp_cases if r.skp_cases is not None else pd.DataFrame()
+        if cases.empty:
+            ttkb.Label(
+                page_cases,
+                text="Случаев СКП не найдено",
+                font=("Calibri", 13),
+                bootstyle="success",
+            ).pack(pady=40)
+        else:
+            cols = list(cases.columns)
+            data = [tuple(x) for x in cases.to_numpy()]
+            make_filtered_tree(
+                page_cases,
+                cols,
+                data,
+                {c: c for c in cols},
+                clipboard_host=self,
+                copy_df=cases,
+                on_copy_df=self._copy_df,
+            )
+
+        ops = r.skp_operations if r.skp_operations is not None else pd.DataFrame()
+        if ops.empty:
+            ttkb.Label(
+                page_ops,
+                text=(
+                    "Нет кодов операций у случаев СКП\n"
+                    "(колонка «Хир. активность (операции)» пуста или отсутствует)"
+                ),
+                font=("Calibri", 12),
+                bootstyle="secondary",
+                justify=tk.CENTER,
+            ).pack(pady=40)
+        else:
+            ttkb.Label(
+                page_ops,
+                text="Связка кодов услуг/операций с историями СКП",
+                font=("Calibri", 11),
+                bootstyle="secondary",
+            ).pack(anchor=tk.W, padx=8, pady=(4, 0))
+            cols = list(ops.columns)
+            data = [tuple(x) for x in ops.to_numpy()]
+            make_filtered_tree(
+                page_ops,
+                cols,
+                data,
+                {c: c for c in cols},
+                clipboard_host=self,
+                copy_df=ops,
+                on_copy_df=self._copy_df,
+            )
+
+        on_segment(0)
+
     def _create_doctors_tab(self) -> None:
         for w in self.doctors_tab.winfo_children():
             w.destroy()
@@ -812,6 +936,10 @@ class LorReportFrame(ttkb.Frame):
                 f.write(f"Всего пациентов: {r.total_patients}\n")
                 f.write(f"Средний койко-день: {r.avg_beddays:.2f}\n")
                 f.write(f"Экстренные: {r.urgent}, Плановые: {r.planned}\n")
+                f.write(
+                    f"СКП (0–1 к/д): {r.skp_count} "
+                    f"(0 дн.: {r.skp_days_0}, 1 дн.: {r.skp_days_1})\n"
+                )
                 share_df = violation_share_table(r.violations_df)
                 if not share_df.empty:
                     f.write("\nСтруктура нарушений:\n")
@@ -846,6 +974,16 @@ class LorReportFrame(ttkb.Frame):
                     doctor = format_doctor_name(row.get("Лечащий врач"))
                     days = int(row.get("Койко-дни_скор", 0))
                     f.write(f"  • {row['Номер КВС']} ({doctor}) — {days} дн.\n")
+            if self.export_sections["СКП"].get() and r.skp_count:
+                f.write(
+                    f"\nСКП (0–1 койко-день): {r.skp_count} "
+                    f"(0 дн.: {r.skp_days_0}, 1 дн.: {r.skp_days_1})\n"
+                )
+                if r.skp_cases is not None and not r.skp_cases.empty:
+                    f.write(r.skp_cases.to_string(index=False) + "\n")
+                if r.skp_operations is not None and not r.skp_operations.empty:
+                    f.write("\nКоды услуг / операции по СКП:\n")
+                    f.write(r.skp_operations.to_string(index=False) + "\n")
         offer_open_folder(file_path)
 
     def save_report_excel(self) -> None:
@@ -886,12 +1024,18 @@ class LorReportFrame(ttkb.Frame):
                             "Средний койко-день",
                             "Экстренные",
                             "Плановые",
+                            "СКП всего (0–1 к/д)",
+                            "СКП 0 койко-дней",
+                            "СКП 1 койко-день",
                         ],
                         "Значение": [
                             r.total_patients,
                             f"{r.avg_beddays:.2f}",
                             r.urgent,
                             r.planned,
+                            r.skp_count,
+                            r.skp_days_0,
+                            r.skp_days_1,
                         ],
                     }
                 )
@@ -922,4 +1066,11 @@ class LorReportFrame(ttkb.Frame):
                 long_df.columns = ["КВС", "Возраст", "Койко-дни", "Врач"]
                 long_df.to_excel(writer, sheet_name="Длительные госпитализации", index=False)
                 auto_adjust_excel_columns(writer, "Длительные госпитализации", long_df)
+            if self.export_sections["СКП"].get() and r.skp_count:
+                if r.skp_cases is not None and not r.skp_cases.empty:
+                    r.skp_cases.to_excel(writer, sheet_name="СКП истории", index=False)
+                    auto_adjust_excel_columns(writer, "СКП истории", r.skp_cases)
+                if r.skp_operations is not None and not r.skp_operations.empty:
+                    r.skp_operations.to_excel(writer, sheet_name="СКП операции", index=False)
+                    auto_adjust_excel_columns(writer, "СКП операции", r.skp_operations)
         offer_open_folder(file_path)

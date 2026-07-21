@@ -68,6 +68,46 @@ def test_analyze_detects_ids_and_primary():
     assert "ИДС" in types
 
 
+def test_skp_counts_and_operations():
+    from lor_analysis import parse_hir_operations
+
+    assert parse_hir_operations(
+        "A16.01.004 Обработка;A16.18.007 Колостомия"
+    ) == [("A16.01.004", "Обработка"), ("A16.18.007", "Колостомия")]
+
+    df = pd.DataFrame(
+        [
+            _sample_row(
+                **{
+                    "Номер КВС": "КВС-0",
+                    "Всего дней проведено в стационаре (от поступления до исхода в днях)": "0",
+                    "Хир. активность (операции)": "A16.01.004 Обработка раны",
+                    "Хир. активность (количество)": "1",
+                }
+            ),
+            _sample_row(
+                **{
+                    "Номер КВС": "КВС-1d",
+                    "Всего дней проведено в стационаре (от поступления до исхода в днях)": "1",
+                }
+            ),
+            _sample_row(
+                **{
+                    "Номер КВС": "КВС-3",
+                    "Всего дней проведено в стационаре (от поступления до исхода в днях)": "3",
+                }
+            ),
+        ]
+    )
+    result = analyze_lor(df)
+    assert result.skp_days_0 == 1
+    assert result.skp_days_1 == 1
+    assert result.skp_count == 2
+    assert len(result.skp_cases) == 2
+    assert "A16.01.004" in result.skp_operations["Код услуги"].tolist()
+    assert int(result.skp_operations.iloc[0]["Количество случаев СКП"]) == 1
+
+
 def test_filter_by_department_exact():
     df = pd.DataFrame(
         [
@@ -78,3 +118,4 @@ def test_filter_by_department_exact():
     filtered = filter_by_department(df, "ЛОР")
     assert len(filtered) == 1
     assert prepare_lor_dataframe(filtered)["Возраст"].iloc[0] == 40
+
