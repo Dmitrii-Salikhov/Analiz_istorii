@@ -1,9 +1,17 @@
 import hashlib
 import json
 import urllib.error
+import zipfile
 
 import updater
-from updater import compute_sha256, find_release_asset, parse_sha256_text, parse_version
+from updater import (
+    _extract_update,
+    compute_sha256,
+    find_release_asset,
+    parse_sha256_text,
+    parse_version,
+    read_version_file,
+)
 
 
 def test_parse_version():
@@ -44,3 +52,28 @@ def test_fetch_failure(monkeypatch):
         lambda *a, **k: (_ for _ in ()).throw(urllib.error.URLError("offline")),
     )
     assert updater.fetch_latest_release("org/repo") is None
+
+
+def test_extract_update_and_read_version(tmp_path):
+    zip_path = tmp_path / "AnalizIstorii.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("AnalizIstorii.exe", b"fake")
+        zf.writestr("version.txt", "1.0.9\n")
+        zf.writestr("_internal/version.txt", "1.0.9\n")
+        zf.writestr("config.json", '{"from_zip": true}')
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "version.txt").write_text("1.0.7\n", encoding="utf-8")
+    (app_dir / "config.json").write_text('{"keep": true}', encoding="utf-8")
+
+    _extract_update(zip_path, staging)
+    assert read_version_file(staging) == "1.0.9"
+    assert (staging / "AnalizIstorii.exe").exists()
+    assert not (staging / "config.json").exists()
+
+    _extract_update(zip_path, app_dir)
+    assert read_version_file(app_dir) == "1.0.9"
+    assert (app_dir / "config.json").read_text(encoding="utf-8") == '{"keep": true}'

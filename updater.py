@@ -17,7 +17,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from paths import get_base_dir
+from paths import get_base_dir, resource_path
 
 ZIP_FILENAME = "AnalizIstorii.zip"
 SHA256_FILENAME = f"{ZIP_FILENAME}.sha256"
@@ -80,9 +80,26 @@ def parse_version(tag):
 
 def read_current_version() -> str:
     try:
-        return (get_base_dir() / "version.txt").read_text(encoding="utf-8").strip()
+        path = resource_path("version.txt")
+        return path.read_text(encoding="utf-8").strip()
     except OSError:
         return "0.0.0"
+
+
+def read_version_file(directory: Path) -> str | None:
+    path = Path(directory) / "version.txt"
+    try:
+        if path.exists():
+            return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    internal = Path(directory) / "_internal" / "version.txt"
+    try:
+        if internal.exists():
+            return internal.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    return None
 
 
 def find_release_asset(release, filename: str):
@@ -244,6 +261,7 @@ def perform_update(repo: str, release=None) -> None:
         _log(f"SHA-256 OK: {actual}")
 
         app_dir = get_base_dir()
+        expected_version = str(release.get("tag_name") or "").lstrip("v").strip()
         try:
             from config_store import load_config, save_config
 
@@ -254,11 +272,53 @@ def perform_update(repo: str, release=None) -> None:
             _log(f"Не удалось записать pending_update_from: {e}")
 
         if sys.platform == "win32" and getattr(sys, "frozen", False):
+            # Распаковка в staging ДО закрытия exe — файлы приложения ещё заняты.
+            staging = Path(tempfile.mkdtemp(prefix="analiz_istorii_update_"))
+            try:
+                _extract_update(zip_path, staging)
+                staged_ver = read_version_file(staging)
+                _log(f"Staging: {staging}, version={staged_ver}, expected={expected_version}")
+                if expected_version and staged_ver and staged_ver != expected_version:
+                    progress_win.destroy()
+                    messagebox.showerror(
+                        "Ошибка обновления",
+                        f"В архиве версия {staged_ver}, ожидалась {expected_version}.",
+                    )
+                    shutil.rmtree(staging, ignore_errors=True)
+                    _safe_remove(zip_path)
+                    _safe_remove(sha_path)
+                    return
+                if not staged_ver:
+                    progress_win.destroy()
+                    messagebox.showerror(
+                        "Ошибка обновления",
+                        "В архиве не найден version.txt.",
+                    )
+                    shutil.rmtree(staging, ignore_errors=True)
+                    _safe_remove(zip_path)
+                    _safe_remove(sha_path)
+                    return
+            except Exception as e:
+                progress_win.destroy()
+                messagebox.showerror("Ошибка обновления", f"Не удалось распаковать архив:\n{e}")
+                shutil.rmtree(staging, ignore_errors=True)
+                _safe_remove(zip_path)
+                _safe_remove(sha_path)
+                return
+
             progress_win.destroy()
-            _launch_windows_frozen_update(app_dir, zip_path, sha_path)
+            _launch_windows_frozen_update(
+                app_dir=app_dir,
+                staging_dir=staging,
+                zip_path=zip_path,
+                sha_path=sha_path,
+                expected_version=staged_ver or expected_version,
+            )
             messagebox.showinfo(
                 "Обновление",
-                "Обновление скачано.\nПриложение закроется и установит новую версию.",
+                "Обновление подготовлено.\n"
+                "После закрытия этого окна файлы будут заменены и приложение перезапустится.\n"
+                "Не запускайте программу вручную, пока не откроется новая версия.",
             )
             sys.exit(0)
 
@@ -291,46 +351,157 @@ def _restart_application(app_dir: Path) -> None:
     subprocess.Popen([python, main_py], cwd=str(app_dir))
 
 
-def _launch_windows_frozen_update(app_dir: Path, zip_path: Path, sha_path: Path) -> None:
+def _launch_windows_frozen_update(
+    app_dir: Path,
+    staging_dir: Path,
+    zip_path: Path,
+    sha_path: Path,
+    expected_version: str,
+) -> None:
     """
-    На Windows exe/DLL заняты процессом — распаковку делает внешний PowerShell-скрипт
-    после завершения текущего процесса.
+    После выхода текущего процесса копирует staging → app_dir (robocopy),
+    проверяет version.txt и перезапускает exe.
+
+    Пути передаются через UTF-8 JSON (не вшиваются в .ps1), чтобы на русской
+    Windows PowerShell 5.1 не портил кириллицу и не создавал «иероглифные»
+    папки на рабочем столе.
     """
-    ps_script = Path(tempfile.gettempdir()) / "update_analiz_istorii.ps1"
-    exe_name = Path(sys.executable).name
-    ps_app = str(app_dir).replace("'", "''")
-    ps_zip = str(zip_path).replace("'", "''")
-    ps_sha = str(sha_path).replace("'", "''")
-    ps_exe = str(Path(sys.executable)).replace("'", "''")
-    commands = f"""
-$ErrorActionPreference = 'SilentlyContinue'
-$timeout = 60
-$procName = '{Path(exe_name).stem}'
-Get-Process -Name $procName -ErrorAction SilentlyContinue | Stop-Process -Force
-for ($i=0; $i -lt $timeout; $i++) {{
-    if (-not (Get-Process -Name $procName -ErrorAction SilentlyContinue)) {{ break }}
-    Start-Sleep -Milliseconds 100
-}}
-Expand-Archive -Path '{ps_zip}' -DestinationPath '{ps_app}' -Force
-if (Test-Path '{ps_app}\\_internal\\version.txt') {{
-    Copy-Item -Path '{ps_app}\\_internal\\version.txt' -Destination '{ps_app}\\version.txt' -Force
-}}
-Start-Process -FilePath '{ps_exe}'
-Remove-Item -Path '{ps_zip}' -Force -ErrorAction SilentlyContinue
-Remove-Item -Path '{ps_sha}' -Force -ErrorAction SilentlyContinue
+    job_dir = Path(tempfile.gettempdir()) / f"analiz_upd_job_{os.getpid()}"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    params_path = job_dir / "params.json"
+    ps_script = job_dir / "update.ps1"
+
+    params = {
+        "pid": os.getpid(),
+        "app_dir": str(app_dir),
+        "staging_dir": str(staging_dir),
+        "zip_path": str(zip_path),
+        "sha_path": str(sha_path),
+        "exe_path": str(Path(sys.executable)),
+        "log_path": str(app_dir / LOG_NAME),
+        "expected_version": expected_version,
+        "proc_name": Path(sys.executable).stem,
+        "job_dir": str(job_dir),
+    }
+    params_path.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Скрипт только ASCII: все пути читаются из JSON в UTF-8.
+    commands = r"""param(
+    [Parameter(Mandatory = $true)]
+    [string]$ParamsFile
+)
+$ErrorActionPreference = 'Continue'
+if (-not (Test-Path -LiteralPath $ParamsFile)) {
+    exit 1
+}
+$p = Get-Content -LiteralPath $ParamsFile -Encoding UTF8 | ConvertFrom-Json
+$log = [string]$p.log_path
+function Write-UpdateLog([string]$msg) {
+    $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
+    try {
+        Add-Content -LiteralPath $log -Value $line -Encoding UTF8
+    } catch {}
+}
+Write-UpdateLog ("Windows updater start. pid={0}, staging='{1}', app='{2}', expect={3}" -f $p.pid, $p.staging_dir, $p.app_dir, $p.expected_version)
+
+$waited = $false
+try {
+    Wait-Process -Id ([int]$p.pid) -Timeout 180 -ErrorAction Stop
+    $waited = $true
+    Write-UpdateLog ("Process {0} exited" -f $p.pid)
+} catch {
+    Write-UpdateLog ("Wait-Process: {0}" -f $_.Exception.Message)
+}
+if (-not $waited) {
+    Start-Sleep -Seconds 2
+    Stop-Process -Id ([int]$p.pid) -Force -ErrorAction SilentlyContinue
+    Write-UpdateLog ("Force-stopped pid {0}" -f $p.pid)
+}
+Start-Sleep -Milliseconds 800
+
+Get-Process -Name ([string]$p.proc_name) -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-UpdateLog ("Stopping leftover {0}" -f $_.Id)
+    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+}
+Start-Sleep -Milliseconds 500
+
+if (-not (Test-Path -LiteralPath ([string]$p.staging_dir))) {
+    Write-UpdateLog 'ERROR: staging missing'
+    exit 1
+}
+
+$robolog = Join-Path $env:TEMP 'analiz_istorii_robocopy.log'
+$rc = 0
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    Write-UpdateLog ("Robocopy attempt {0}" -f $attempt)
+    & robocopy ([string]$p.staging_dir) ([string]$p.app_dir) /E /IS /IT /R:3 /W:1 /NFL /NDL /NJH /NJS /NP /LOG+:$robolog | Out-Null
+    $rc = $LASTEXITCODE
+    Write-UpdateLog ("Robocopy exit={0}" -f $rc)
+    if ($rc -lt 8) { break }
+    Start-Sleep -Seconds 2
+}
+if ($rc -ge 8) {
+    Write-UpdateLog ("ERROR: robocopy failed with {0}" -f $rc)
+}
+
+$srcVer = Join-Path ([string]$p.staging_dir) 'version.txt'
+$dstVer = Join-Path ([string]$p.app_dir) 'version.txt'
+$srcVerInternal = Join-Path ([string]$p.staging_dir) '_internal\version.txt'
+if (Test-Path -LiteralPath $srcVer) {
+    Copy-Item -LiteralPath $srcVer -Destination $dstVer -Force
+    Write-UpdateLog 'Copied version.txt from staging root'
+} elseif (Test-Path -LiteralPath $srcVerInternal) {
+    Copy-Item -LiteralPath $srcVerInternal -Destination $dstVer -Force
+    Write-UpdateLog 'Copied version.txt from staging _internal'
+}
+if (Test-Path -LiteralPath $srcVerInternal) {
+    $dstInternal = Join-Path ([string]$p.app_dir) '_internal\version.txt'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $dstInternal) -Force | Out-Null
+    Copy-Item -LiteralPath $srcVerInternal -Destination $dstInternal -Force
+}
+
+$installed = $null
+if (Test-Path -LiteralPath $dstVer) {
+    $installed = (Get-Content -LiteralPath $dstVer -Raw -ErrorAction SilentlyContinue).Trim()
+}
+Write-UpdateLog ("Installed version.txt='{0}' (expected '{1}')" -f $installed, $p.expected_version)
+if ($installed -ne [string]$p.expected_version) {
+    Write-UpdateLog 'ERROR: version mismatch after copy'
+}
+
+$exe = [string]$p.exe_path
+if (Test-Path -LiteralPath $exe) {
+    Write-UpdateLog ("Starting '{0}'" -f $exe)
+    Start-Process -FilePath $exe -WorkingDirectory ([string]$p.app_dir)
+} else {
+    Write-UpdateLog ("ERROR: exe missing '{0}'" -f $exe)
+}
+
+Remove-Item -LiteralPath ([string]$p.staging_dir) -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath ([string]$p.zip_path) -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath ([string]$p.sha_path) -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath ([string]$p.job_dir) -Recurse -Force -ErrorAction SilentlyContinue
+Write-UpdateLog 'Windows updater done'
 """
-    ps_script.write_text(commands, encoding="utf-8")
+    ps_script.write_text(commands, encoding="ascii")
+    _log(f"Запущен Windows updater job={job_dir}, pid={params['pid']}, staging={staging_dir}")
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    # cwd = TEMP (обычно без кириллицы в коротком виде не гарантировано, но пути абсолютные)
     subprocess.Popen(
         [
             "powershell.exe",
+            "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
             "-File",
             str(ps_script),
+            "-ParamsFile",
+            str(params_path),
         ],
+        cwd=str(Path(tempfile.gettempdir())),
         creationflags=creationflags,
     )
+
 
 
 def check_for_updates(repo: str, current_version_str: str, silent_if_updated: bool = False):
