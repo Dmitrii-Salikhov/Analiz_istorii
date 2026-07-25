@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Точка входа приложения «Анализ работы отделения»."""
+"""Tkinter UI is legacy. Prefer Electron: cd desktop && npm run dev"""
 from __future__ import annotations
 
 import logging
@@ -38,6 +36,12 @@ def create_app():
 
 
 def main() -> None:
+    """Legacy Tkinter entry point. Primary UI: desktop/ (Electron)."""
+    print(
+        "Внимание: Tkinter UI устарел (legacy). "
+        "Основной интерфейс — Electron: cd desktop && npm run dev",
+        file=sys.stderr,
+    )
     setup_logging()
     sys.excepthook = log_exception
     app = create_app()

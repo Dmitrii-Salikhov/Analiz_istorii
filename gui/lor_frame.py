@@ -36,7 +36,12 @@ from gui.chrome import (
     notify_copied,
 )
 from gui.helpers import auto_adjust_excel_columns, build_empty_state, offer_open_folder
-from gui.ui_theme import VIOLATION_TREE_TAGS, chart_color_for_violation
+from gui.ui_theme import (
+    chart_color_for_violation,
+    style_matplotlib_axes,
+    style_tk_text,
+    violation_tree_tags_for_theme,
+)
 from gui.widgets import ScrollableFrame, enable_file_drop, make_filtered_tree, run_with_progress
 from lor_analysis import (
     LorAnalysisResult,
@@ -71,6 +76,16 @@ class LorReportFrame(ttkb.Frame):
 
         self._build_ui()
         enable_file_drop(self, self._on_dropped_files, extensions=(".xlsx",))
+
+    def _current_theme(self) -> str:
+        return getattr(self.app, "app_settings", {}).get("theme") or "slice-light"
+
+    def _violation_tags(self) -> dict[str, str]:
+        return violation_tree_tags_for_theme(self._current_theme())
+
+    def refresh_theme(self) -> None:
+        if self.analysis is not None:
+            self.display_results()
 
     def _build_ui(self) -> None:
         toolbar = ttkb.Frame(self, padding=(8, 6))
@@ -264,7 +279,7 @@ class LorReportFrame(ttkb.Frame):
             self._set_actions_enabled(False)
             self._show_work_content(False)
             return
-        self.analysis = analyze_lor(filtered)
+        self.analysis = analyze_lor(filtered, self.app.app_settings)
         self._update_status()
         self.display_results()
         self._set_actions_enabled(True)
@@ -396,7 +411,7 @@ class LorReportFrame(ttkb.Frame):
                 copy_df=share_df,
                 on_copy_df=self._copy_df,
                 tag_column_index=0,
-                tag_colors=VIOLATION_TREE_TAGS,
+                tag_colors=self._violation_tags(),
             )
 
         graph_frame = ttkb.Frame(chart_row)
@@ -425,6 +440,7 @@ class LorReportFrame(ttkb.Frame):
                     va="bottom",
                     fontsize=8,
                 )
+        style_matplotlib_axes(fig, ax, self._current_theme())
         fig.tight_layout()
         canvas = FigureCanvasTkAgg(fig, master=graph_frame)
         canvas.draw()
@@ -449,7 +465,8 @@ class LorReportFrame(ttkb.Frame):
 
         note_frame = ttkb.Labelframe(main_frame, text="Аналитическая записка", padding=10)
         note_frame.pack(fill=tk.X, pady=10)
-        note_text = tk.Text(note_frame, height=7, font=("Calibri", 12), wrap=tk.WORD)
+        note_text = tk.Text(note_frame, height=7, font=("Segoe UI", 11), wrap=tk.WORD)
+        style_tk_text(note_text, self._current_theme())
         note_text.pack(fill=tk.BOTH, expand=True)
         if not r.doctor_stats.empty:
             worst = r.doctor_stats.loc[r.doctor_stats["количество нарушений"].idxmax(), "врач"]
@@ -582,7 +599,7 @@ class LorReportFrame(ttkb.Frame):
                 headings,
                 clipboard_host=self,
                 tag_column_index=0,
-                tag_colors=VIOLATION_TREE_TAGS,
+                tag_colors=self._violation_tags(),
             )
 
             if group_name == "ИДС" and not r.ids_stats.empty:

@@ -1,4 +1,7 @@
-"""Главное окно приложения."""
+"""Главное окно приложения (legacy Tkinter UI).
+
+Основной интерфейс — Electron (`desktop/`). Этот модуль сохранён для совместимости.
+"""
 from __future__ import annotations
 
 import logging
@@ -15,7 +18,17 @@ from config_store import load_config, save_config
 from gui.ksg_frame import KsgReportFrame
 from gui.lor_frame import LorReportFrame
 from gui.settings_dialog import SettingsDialog
-from gui.ui_theme import LIGHT_THEME, is_dark_theme, toggle_theme_name
+from gui.ui_theme import (
+    FONT_SANS,
+    FONT_TITLE,
+    LIGHT_THEME,
+    apply_slice_chrome,
+    is_dark_theme,
+    normalize_theme_name,
+    register_slice_themes,
+    tokens_for_theme,
+    toggle_theme_name,
+)
 from gui.whats_new import show_whats_new
 from gui.widgets import ScrollableFrame, copy_from_focused_widget, wheel_steps
 from paths import get_base_dir
@@ -26,9 +39,11 @@ LOG_FILE = "errors.log"
 
 class App(ttkb.Window):
     def __init__(self):
+        register_slice_themes()
         self.app_settings = load_config()
         self.current_version = read_current_version()
-        theme = self.app_settings.get("theme") or LIGHT_THEME
+        theme = normalize_theme_name(self.app_settings.get("theme"))
+        self.app_settings["theme"] = theme
         super().__init__(
             themename=theme,
             title=f"Анализ работы отделения — v{self.current_version}",
@@ -37,28 +52,28 @@ class App(ttkb.Window):
         self.minsize(960, 640)
         self.resizable(True, True)
 
-        style = ttkb.Style()
-        style.configure("Treeview", rowheight=26)
+        apply_slice_chrome(self.style, theme)
+        self._apply_window_chrome(theme)
 
-        header = ttkb.Frame(self)
-        header.pack(fill=tk.X, padx=12, pady=(10, 6))
+        header = ttkb.Frame(self, style="Slice.TFrame", padding=(12, 10))
+        header.pack(fill=tk.X)
 
         lbl_title = ttkb.Label(
             header,
             text="Анализ работы отделения",
-            font=("Calibri", 18, "bold"),
+            font=FONT_TITLE,
             bootstyle="primary",
         )
         lbl_title.pack(side=tk.LEFT)
 
-        right = ttkb.Frame(header)
+        right = ttkb.Frame(header, style="Slice.TFrame")
         right.pack(side=tk.RIGHT)
 
-        self.version_var = tk.StringVar(value=f"Версия {self.current_version}")
+        self.version_var = tk.StringVar(value=f"v{self.current_version}")
         ttkb.Label(
             right,
             textvariable=self.version_var,
-            font=("Calibri", 11),
+            font=FONT_SANS,
             bootstyle="secondary",
         ).pack(side=tk.LEFT, padx=(0, 8))
 
@@ -155,6 +170,13 @@ class App(ttkb.Window):
             self.app_settings["last_seen_version"] = current
             save_config(self.app_settings)
 
+    def _apply_window_chrome(self, theme: str) -> None:
+        tokens = tokens_for_theme(theme)
+        try:
+            self.configure(background=tokens["bg"])
+        except tk.TclError:
+            pass
+
     def _theme_button_label(self) -> str:
         return "Светлая тема" if is_dark_theme(self.app_settings.get("theme", "")) else "Тёмная тема"
 
@@ -163,7 +185,14 @@ class App(ttkb.Window):
         self.app_settings["theme"] = new_theme
         save_config(self.app_settings)
         try:
+            register_slice_themes()
             self.style.theme_use(new_theme)
+            apply_slice_chrome(self.style, new_theme)
+            self._apply_window_chrome(new_theme)
+            if hasattr(self.lor_frame, "refresh_theme"):
+                self.lor_frame.refresh_theme()
+            if hasattr(self.ksg_frame, "refresh_theme"):
+                self.ksg_frame.refresh_theme()
         except Exception:
             messagebox.showinfo(
                 "Тема",

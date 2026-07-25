@@ -29,7 +29,7 @@ from gui.chrome import (
     notify_copied,
 )
 from gui.helpers import build_empty_state, offer_open_folder
-from gui.ui_theme import short_month_label
+from gui.ui_theme import short_month_label, style_matplotlib_axes, style_tk_text
 from gui.widgets import ScrollableFrame, enable_file_drop, make_filtered_tree, run_with_progress
 from ksg_analysis import (
     analyze_ksg,
@@ -56,6 +56,13 @@ class KsgReportFrame(ttkb.Frame):
     @property
     def reference_status(self) -> str:
         return self._reference_status
+
+    def refresh_theme(self) -> None:
+        if self.results:
+            self.display_all()
+
+    def _current_theme(self) -> str:
+        return getattr(self.app, "app_settings", {}).get("theme") or "slice-light"
 
     def _build_ui(self) -> None:
         toolbar = ttkb.Frame(self, padding=(8, 6))
@@ -443,7 +450,8 @@ class KsgReportFrame(ttkb.Frame):
         else:
             ttkb.Label(frame, text="Нет данных об операциях").pack()
         if r["unknown_codes"]:
-            txt = tk.Text(frame, height=5, font=("Calibri", 11))
+            txt = tk.Text(frame, height=5, font=("Segoe UI", 10))
+            style_tk_text(txt, self._current_theme())
             txt.insert(tk.END, "Нераспознанные коды услуг:\n" + "\n".join(r["unknown_codes"]))
             txt.configure(state=tk.DISABLED)
             txt.pack(fill=tk.X, pady=10)
@@ -479,6 +487,7 @@ class KsgReportFrame(ttkb.Frame):
             autopct="%1.1f%%",
         )
         ax.set_title("Распределение сумм по врачам")
+        style_matplotlib_axes(fig, ax, self._current_theme())
         canvas = FigureCanvasTkAgg(fig, master=frame)
         canvas.draw()
         canvas.get_tk_widget().pack(pady=10)
@@ -513,9 +522,19 @@ class KsgReportFrame(ttkb.Frame):
         high_entry.pack(padx=10, pady=2)
 
         kslp = r.get("kslp_settings", {})
+        rules = kslp.get("rules") or []
+        if rules:
+            rule_bits = []
+            for rule in rules:
+                name = rule.get("name") or "Правило"
+                codes = ", ".join(rule.get("codes") or [])
+                rule_bits.append(f"{name}: {codes}" if codes else name)
+            rules_str = "; ".join(rule_bits)
+        else:
+            rules_str = ", ".join(kslp.get("codes", [])) or "—"
         info = (
             f"КСЛП: возраст {kslp.get('age_min', 0)}–{kslp.get('age_max', 4)} лет, "
-            f"старший ≥{kslp.get('senior_age', 75)}, коды: {', '.join(kslp.get('codes', []))}"
+            f"старший ≥{kslp.get('senior_age', 75)}, правила: {rules_str}"
         )
         ttkb.Label(frame, text=info, font=("Calibri", 10), bootstyle="secondary").pack(
             anchor="w", padx=10, pady=4
@@ -909,6 +928,10 @@ class KsgReportFrame(ttkb.Frame):
         legend_labels = [line.get_label() for line in lines]
         ax1.legend(lines, legend_labels, loc="upper left")
         ax1.set_title("Сравнение файлов")
+        theme = self._current_theme()
+        style_matplotlib_axes(fig, ax1, theme)
+        style_matplotlib_axes(fig, ax2, theme)
+        style_matplotlib_axes(fig, ax3, theme)
         fig.tight_layout()
 
         canvas = FigureCanvasTkAgg(fig, master=graph_frame)

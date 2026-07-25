@@ -3,25 +3,99 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import Any, Mapping
+import re
 
 import pandas as pd
 
 
+def _is_numeric_code(token: str) -> bool:
+    # «022201», «022201/», «№022201»
+    return bool(re.fullmatch(r"[№#]?\d+/?", token))
+
+
+def _is_junk_token(token: str) -> bool:
+    """Служебные куски вроде «/», «-», пустые обломки разделителей."""
+    t = token.strip()
+    if not t:
+        return True
+    if re.fullmatch(r"[/\\|–—−·•.,;:]+", t):
+        return True
+    return not re.search(r"[A-Za-zА-Яа-яЁё]", t)
+
+
+def _is_patronymic(token: str) -> bool:
+    w = token.lower().rstrip(".")
+    return w.endswith(("вич", "вна", "ична", "инична", "оглы", "кызы"))
+
+
+def _looks_like_initials(token: str) -> bool:
+    letters = re.findall(r"[A-Za-zА-Яа-яЁё]", token)
+    if not letters:
+        return False
+    if "." in token:
+        return True
+    compact = token.replace(".", "")
+    return len(compact) <= 3 and compact.isalpha() and compact.upper() == compact
+
+
+def _initials_from_parts(parts: list[str]) -> list[str]:
+    initials: list[str] = []
+    for part in parts:
+        letters = re.findall(r"[A-Za-zА-Яа-яЁё]", part)
+        if not letters:
+            continue
+        if _looks_like_initials(part):
+            initials.extend(ch.upper() + "." for ch in letters)
+        else:
+            initials.append(letters[0].upper() + ".")
+    return initials
+
+
 def format_doctor_name(full_name) -> str:
+    """Фамилия целиком, имя и отчество — инициалами: «Салихов Д.А.».
+
+    Учитывает табельный номер в начале («022201 …»), разделители «/»,
+    и порядок «Имя Отчество Фамилия» / «И.О. Фамилия».
+    """
     if pd.isna(full_name) or full_name == "":
         return "неизвестно"
-    parts = str(full_name).strip().split()
+    # «022201 / Фамилия …» → нормализуем разделители в пробелы
+    text = str(full_name).strip()
+    text = re.sub(r"[/\\|]+", " ", text)
+    parts = text.split()
     if not parts:
         return "неизвестно"
-    last = parts[0]
-    initials = []
-    for part in parts[1:]:
-        if part and part[0].isalpha():
-            initials.append(part[0].upper() + ".")
+
+    while parts and (_is_numeric_code(parts[0]) or _is_junk_token(parts[0])):
+        parts.pop(0)
+    # на случай кода/мусора в середине после нормализации
+    parts = [p for p in parts if not _is_junk_token(p) and not _is_numeric_code(p)]
+    if not parts:
+        return "неизвестно"
+
+    # И.О. Фамилия  /  Д.Н. Салихов
+    if len(parts) >= 2 and _looks_like_initials(parts[0]):
+        surname = parts[-1]
+        name_parts = parts[:-1]
+    # Имя Отчество Фамилия  /  Дмитрий Николаевич Салихов
+    elif len(parts) >= 3 and _is_patronymic(parts[1]):
+        surname = parts[-1]
+        name_parts = parts[:-1]
+    else:
+        # Фамилия Имя Отчество  /  Салихов Дмитрий Николаевич
+        surname = parts[0]
+        name_parts = parts[1:]
+
+    # Если «фамилия» всё ещё похожа на инициалы — берём последнее слово
+    if _looks_like_initials(surname) and len(parts) >= 2:
+        surname = parts[-1]
+        name_parts = parts[:-1]
+
+    initials = _initials_from_parts(name_parts)
     if initials:
-        return f"{last} {' '.join(initials)}"
-    return last
+        return f"{surname} {''.join(initials)}"
+    return surname
 
 
 def extract_discharge_period(df: pd.DataFrame) -> tuple[date | None, date | None]:
@@ -252,7 +326,15 @@ class LorAnalysisResult:
         }
 
 
-def analyze_lor(df: pd.DataFrame) -> LorAnalysisResult:
+def analyze_lor(
+    df: pd.DataFrame,
+    settings: Mapping[str, Any] | None = None,
+) -> LorAnalysisResult:
+    settings = settings or {}
+    long_stay_days = int(settings.get("long_stay_days", 7))
+    if long_stay_days < 1:
+        long_stay_days = 1
+
     prepared = prepare_lor_dataframe(df)
     period_start, period_end = extract_discharge_period(prepared)
     total = len(prepared)
@@ -341,11 +423,11 @@ def analyze_lor(df: pd.DataFrame) -> LorAnalysisResult:
         lambda r: "Отсутствует ИДС",
     )
 
-    long_stay = prepared[prepared["Койко-дни_скор"] > 7]
+    long_stay = prepared[prepared["Койко-дни_скор"] > long_stay_days]
     add_rows(
         long_stay,
         "Длительная госпитализация",
-        lambda r: f"Койко-день >7 дней ({int(r['Койко-дни_скор'])})",
+        lambda r: f"Койко-день >{long_stay_days} дней ({int(r['Койко-дни_скор'])})",
     )
 
     surg = prepared[prepared["Хир_кол"] > 0]
@@ -429,3 +511,79 @@ def analyze_lor(df: pd.DataFrame) -> LorAnalysisResult:
         skp_cases=skp_cases,
         skp_operations=skp_operations,
     )
+
+
+def format_violations_summary_sections(
+    violations_df: pd.DataFrame,
+    *,
+    long_stay_days: int = 7,
+) -> list[dict[str, Any]]:
+    """
+    Сводные блоки нарушений для копирования (как во вкладке «Все нарушения»).
+    Каждый элемент: {id, title, count, text}.
+    """
+    if violations_df is None or violations_df.empty:
+        return []
+
+    category_info = {
+        "МКСБ": "МКСБ (Не подписана)",
+        "Протоколы операций": "Протоколы операций (несоответствие)",
+        "Эпикриз": "Эпикризы (не оформлены)",
+        "Первичный осмотр": "Первичный осмотр (не оформлен)",
+        "Лекарственные назначения": "Лекарственные назначения (отсутствуют)",
+        "Дневниковые записи": "Дневниковые записи (недостаточно)",
+        "ИДС": "ИДС (отсутствует)",
+        "Длительная госпитализация": f"Длительная госпитализация (>{long_stay_days} дней)",
+    }
+
+    sections: list[dict[str, Any]] = []
+    for vtype, group in violations_df.groupby("тип_нарушения", sort=False):
+        title = category_info.get(str(vtype), str(vtype))
+        lines = [f"{title}:"]
+        if vtype == "Протоколы операций":
+            for _, row in group.iterrows():
+                doctor_short = format_doctor_name(row["врач"])
+                match = re.search(r"операций (\d+), протоколов (\d+)", str(row["нарушение"]))
+                if match:
+                    lines.append(
+                        f"• {row['КВС']} ({doctor_short}): {match.group(1)} операции / "
+                        f"{match.group(2)} протоколов"
+                    )
+                else:
+                    lines.append(f"• {row['КВС']} ({doctor_short}): {row['нарушение']}")
+        elif vtype == "Дневниковые записи":
+            for _, row in group.iterrows():
+                doctor_short = format_doctor_name(row["врач"])
+                match = re.search(r"нужно (\d+), оформлено (\d+)", str(row["нарушение"]))
+                if match:
+                    lines.append(
+                        f"• {row['КВС']} ({doctor_short}): нужно {match.group(1)}, "
+                        f"оформлено {match.group(2)}"
+                    )
+                else:
+                    lines.append(f"• {row['КВС']} ({doctor_short}): {row['нарушение']}")
+        elif vtype == "МКСБ":
+            for _, row in group.iterrows():
+                doctor_short = format_doctor_name(row["врач"])
+                age_str = f"{int(row['возраст'])}г" if pd.notna(row["возраст"]) else "?г"
+                lines.append(f"• {row['КВС']} ({age_str}) — {doctor_short}")
+        elif vtype == "Длительная госпитализация":
+            for _, row in group.iterrows():
+                doctor_short = format_doctor_name(row["врач"])
+                match = re.search(r"\((\d+)\)", str(row["нарушение"]))
+                days = match.group(1) if match else "?"
+                lines.append(f"• {row['КВС']} ({doctor_short}) — {days} дн.")
+        else:
+            for _, row in group.iterrows():
+                doctor_short = format_doctor_name(row["врач"])
+                lines.append(f"• {row['КВС']} ({doctor_short})")
+        lines.append("-" * 50)
+        sections.append(
+            {
+                "id": str(vtype),
+                "title": title,
+                "count": int(len(group)),
+                "text": "\n".join(lines),
+            }
+        )
+    return sections

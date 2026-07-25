@@ -9,6 +9,7 @@ from typing import Any, Mapping
 import pandas as pd
 
 from paths import resource_path
+from lor_analysis import format_doctor_name
 
 DEFAULT_REFERENCE_MAPPING = [
     ("Аденотомия", "A16.08.002.001", "на миндалинах и аденоидах (5.2)"),
@@ -89,6 +90,37 @@ def _age_group(age) -> str:
     return "65+ лет"
 
 
+def _resolve_kslp_rules(settings: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Normalize kslp_rules from settings; fall back to flat kslp_operations_codes."""
+    raw = settings.get("kslp_rules")
+    rules: list[dict[str, Any]] = []
+    if isinstance(raw, list):
+        for i, item in enumerate(raw):
+            if not isinstance(item, dict):
+                continue
+            codes = [str(c).strip() for c in (item.get("codes") or []) if str(c).strip()]
+            if not codes:
+                continue
+            name = str(item.get("name") or f"Правило {i + 1}").strip() or f"Правило {i + 1}"
+            rules.append({"id": str(item.get("id") or f"rule-{i + 1}"), "name": name, "codes": codes})
+    if rules:
+        return rules
+    legacy = settings.get("kslp_operations_codes") or []
+    codes = [str(c).strip() for c in legacy if str(c).strip()]
+    if not codes:
+        return []
+    return [{"id": "legacy-ops", "name": "Правило 1", "codes": codes}]
+
+
+def _matching_kslp_rules(code_set: set[str], rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    matched: list[dict[str, Any]] = []
+    for rule in rules:
+        codes = rule.get("codes") or []
+        if codes and all(c in code_set for c in codes):
+            matched.append(rule)
+    return matched
+
+
 def analyze_ksg(
     df: pd.DataFrame,
     reference: Mapping[str, tuple[str, str]],
@@ -144,7 +176,7 @@ def analyze_ksg(
                 category, group = cat_info
             operations.append(
                 {
-                    "Врач": row["Врач"],
+                    "Врач": format_doctor_name(row["Врач"]),
                     "Код услуги": code,
                     "Категория": category,
                     "Группа": group,
@@ -155,6 +187,7 @@ def analyze_ksg(
         ops_pivot = ops_df.pivot_table(
             index=["Код услуги", "Категория"], columns="Врач", aggfunc="size", fill_value=0
         )
+        ops_pivot.index = ops_pivot.index.set_names(["Код услуги", "Операция"])
     else:
         ops_pivot = pd.DataFrame()
 
@@ -177,6 +210,9 @@ def analyze_ksg(
     age_min = int(settings.get("kslp_age_min", 0))
     age_max = int(settings.get("kslp_age_max", 4))
     senior_age = int(settings.get("kslp_senior_age", 75))
+    kslp_rules = _resolve_kslp_rules(settings)
+    if not target_codes and kslp_rules:
+        target_codes = list(kslp_rules[0].get("codes") or [])
 
     kslp_issues = []
     for _, row in data.iterrows():
@@ -187,8 +223,9 @@ def analyze_ksg(
         code_set = set(str(row["Код услуги"]).strip().split())
         is_child = age_min <= age <= age_max
         is_senior = age >= senior_age
-        has_all_three = bool(target_codes) and all(c in code_set for c in target_codes)
-        need_kslp = is_child or is_senior or has_all_three
+        matched_rules = _matching_kslp_rules(code_set, kslp_rules)
+        has_ops_rule = bool(matched_rules)
+        need_kslp = is_child or is_senior or has_ops_rule
 
         code_names = []
         for c in code_set:
@@ -202,8 +239,9 @@ def analyze_ksg(
                 reasons.append(f"ребёнок {age_min}-{age_max} лет")
             if is_senior:
                 reasons.append(f"возраст ≥{senior_age} лет")
-            if has_all_three:
-                reasons.append("наличие полного набора целевых операций")
+            for rule in matched_rules:
+                rule_codes = ", ".join(rule["codes"])
+                reasons.append(f"правило «{rule['name']}» ({rule_codes})")
             kslp_issues.append(
                 (
                     row["№ талона"],
@@ -215,6 +253,11 @@ def analyze_ksg(
                 )
             )
         elif not need_kslp and kslp > 0:
+            rule_hint = (
+                f"{len(kslp_rules)} правил(а) по операциям"
+                if kslp_rules
+                else "нет правил по операциям"
+            )
             kslp_issues.append(
                 (
                     row["№ талона"],
@@ -224,7 +267,7 @@ def analyze_ksg(
                     kslp,
                     (
                         f"КСЛП > 0 без показаний (нет оснований: не ребёнок {age_min}-{age_max}, "
-                        f"возраст < {senior_age}, нет полного набора операций). "
+                        f"возраст < {senior_age}, не сработало ни одно правило операций — {rule_hint}). "
                         f"Коды услуг: {codes_str}"
                     ),
                 )
@@ -267,6 +310,7 @@ def analyze_ksg(
             "age_max": age_max,
             "senior_age": senior_age,
             "codes": target_codes,
+            "rules": kslp_rules,
         },
     }
 

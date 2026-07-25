@@ -1,0 +1,38 @@
+.data-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.data-table__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.data-table__filter {
+  flex: 1;
+  min-width: 160px;
+  max-width: 360px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 9px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.data-table__count {
+  font-size: 12px;
+}
+
+td.cell-anomaly-down {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  font-weight: 600;
+}
+
+td.cell-anomaly-up {
+  background: color-mix(in srgb, var(--warning) 28%, transparent);
+  font-weight: 600;
+}

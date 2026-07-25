@@ -73,6 +73,57 @@ def test_kslp_child_requires_nonzero():
     assert result["total_kslp_issues"] >= 1
 
 
+def test_kslp_rule_all_codes_require_nonzero():
+    settings = {
+        "date_format": "dayfirst",
+        "ksg_threshold_low": 20000,
+        "ksg_threshold_high": 100000,
+        "kslp_age_min": 0,
+        "kslp_age_max": 4,
+        "kslp_senior_age": 75,
+        "kslp_rules": [
+            {
+                "id": "r1",
+                "name": "Тройка",
+                "codes": ["A16.08.017.001", "A16.08.013.001", "A16.08.010.003"],
+            }
+        ],
+    }
+    codes = "A16.08.017.001 A16.08.013.001 A16.08.010.003"
+    df = pd.DataFrame(
+        [
+            _ksg_row(**{"Код услуги": codes, "КСЛП итоговый": "0"}),
+            _ksg_row(**{"№ талона": "T2", "Код услуги": "A16.08.017.001", "КСЛП итоговый": "0"}),
+        ]
+    )
+    result = analyze_ksg(df, build_default_reference(), settings)
+    assert result["total_kslp_issues"] == 1
+    assert "Тройка" in result["kslp_issues"].iloc[0]["Замечание"]
+
+
+def test_kslp_any_of_two_rules_matches():
+    settings = {
+        "date_format": "dayfirst",
+        "ksg_threshold_low": 20000,
+        "ksg_threshold_high": 100000,
+        "kslp_age_min": 0,
+        "kslp_age_max": 4,
+        "kslp_senior_age": 75,
+        "kslp_rules": [
+            {"id": "r1", "name": "Правило A", "codes": ["A16.08.017.001", "A16.08.013.001"]},
+            {"id": "r2", "name": "Правило B", "codes": ["A16.08.010.003"]},
+        ],
+    }
+    df = pd.DataFrame(
+        [
+            _ksg_row(**{"Код услуги": "A16.08.010.003", "КСЛП итоговый": "0"}),
+        ]
+    )
+    result = analyze_ksg(df, build_default_reference(), settings)
+    assert result["total_kslp_issues"] == 1
+    assert "Правило B" in result["kslp_issues"].iloc[0]["Замечание"]
+
+
 def test_ksg_period_uses_vypiska_not_postuplenie():
     df = pd.DataFrame(
         {
@@ -135,3 +186,51 @@ def test_build_month_comparison_sorts_ascending():
     assert cmp["names"] == ["май.xlsx", "июнь.xlsx"]
     assert cmp["total_patients"] == [10, 12]
     assert "А" in cmp["doctors"] and "Б" in cmp["doctors"]
+
+
+def test_build_month_comparison_subset_two_of_three():
+    """Сравнение выбранных файлов (как indices в ksg.compare)."""
+    fake = [
+        {
+            "name": "апрель.xlsx",
+            "label": "апр 2026",
+            "df": None,
+            "results": {
+                "total_patients": 8,
+                "total_sum": 80.0,
+                "avg_kz_total": 1.0,
+                "total_kslp_issues": 0,
+                "doctor_sums": pd.DataFrame({"Врач": ["А"], "Сумма к оплате": [80.0]}),
+            },
+        },
+        {
+            "name": "май.xlsx",
+            "label": "май 2026",
+            "df": None,
+            "results": {
+                "total_patients": 10,
+                "total_sum": 100.0,
+                "avg_kz_total": 1.1,
+                "total_kslp_issues": 1,
+                "doctor_sums": pd.DataFrame({"Врач": ["А"], "Сумма к оплате": [100.0]}),
+            },
+        },
+        {
+            "name": "июнь.xlsx",
+            "label": "июн 2026",
+            "df": None,
+            "results": {
+                "total_patients": 12,
+                "total_sum": 150.0,
+                "avg_kz_total": 1.2,
+                "total_kslp_issues": 2,
+                "doctor_sums": pd.DataFrame({"Врач": ["А"], "Сумма к оплате": [150.0]}),
+            },
+        },
+    ]
+    # как UI: indices [0, 2] → апрель + июнь
+    selected = [fake[0], fake[2]]
+    cmp = build_month_comparison(selected)
+    assert cmp["names"] == ["апрель.xlsx", "июнь.xlsx"]
+    assert cmp["total_patients"] == [8, 12]
+    assert cmp["doctor_sums"]["А"] == [80.0, 150.0]

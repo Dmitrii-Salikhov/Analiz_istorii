@@ -7,23 +7,20 @@ from tkinter import messagebox
 import ttkbootstrap as ttkb
 
 from config_store import save_config
+from gui.ui_theme import (
+    DARK_THEME,
+    LIGHT_THEME,
+    apply_slice_chrome,
+    normalize_theme_name,
+    register_slice_themes,
+)
 from gui.widgets import ScrollableFrame
 
-THEME_CHOICES = (
-    "cosmo",
-    "flatly",
-    "journal",
-    "litera",
-    "lumen",
-    "minty",
-    "pulse",
-    "sandstone",
-    "united",
-    "yeti",
-    "morph",
-    "simplex",
-    "cerculean",
-)
+THEME_CHOICES = (LIGHT_THEME, DARK_THEME)
+THEME_LABELS = {
+    LIGHT_THEME: "Светлая (Slice)",
+    DARK_THEME: "Тёмная (Slice)",
+}
 
 
 class SettingsDialog(tk.Toplevel):
@@ -73,15 +70,18 @@ class SettingsDialog(tk.Toplevel):
             row=row, column=0, sticky="w", pady=(0, 4)
         )
         row += 1
-        self.theme_var = tk.StringVar(value=settings.get("theme", "flatly"))
-        theme_combo = ttkb.Combobox(
-            body,
-            textvariable=self.theme_var,
-            values=THEME_CHOICES,
-            state="readonly",
-            width=28,
-        )
-        theme_combo.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        current_theme = normalize_theme_name(settings.get("theme"))
+        self.theme_var = tk.StringVar(value=current_theme)
+        theme_frame = ttkb.Frame(body)
+        theme_frame.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        for value in THEME_CHOICES:
+            ttkb.Radiobutton(
+                theme_frame,
+                text=THEME_LABELS[value],
+                variable=self.theme_var,
+                value=value,
+                bootstyle="info",
+            ).pack(side=tk.LEFT, padx=(0, 16))
         row += 1
 
         ttkb.Label(body, text="Пороги КСГ (руб.):", font=("Calibri", 11, "bold")).grid(
@@ -121,7 +121,11 @@ class SettingsDialog(tk.Toplevel):
             row=row, column=0, columnspan=2, sticky="w", pady=(4, 2)
         )
         row += 1
-        codes = settings.get("kslp_operations_codes") or []
+        rules = settings.get("kslp_rules") or []
+        if isinstance(rules, list) and rules and isinstance(rules[0], dict):
+            codes = list(rules[0].get("codes") or [])
+        else:
+            codes = settings.get("kslp_operations_codes") or []
         self.codes_var = tk.StringVar(value=", ".join(codes))
         ttkb.Entry(body, textvariable=self.codes_var, width=48).grid(
             row=row, column=0, columnspan=2, sticky="ew", pady=(0, 10)
@@ -179,9 +183,25 @@ class SettingsDialog(tk.Toplevel):
 
         codes_raw = self.codes_var.get().strip()
         codes = [c.strip() for c in codes_raw.split(",") if c.strip()] if codes_raw else []
+        # Tk UI edits a single flat list → keep as one rule (preserves multi-rule from Electron if
+        # the first rule's codes match; otherwise replace with one rule from the field).
+        existing_rules = self.app.app_settings.get("kslp_rules") or []
+        first_codes = []
+        if (
+            isinstance(existing_rules, list)
+            and existing_rules
+            and isinstance(existing_rules[0], dict)
+        ):
+            first_codes = [str(c).strip() for c in (existing_rules[0].get("codes") or []) if str(c).strip()]
+        if codes == first_codes and isinstance(existing_rules, list) and existing_rules:
+            kslp_rules = existing_rules
+        else:
+            kslp_rules = (
+                [{"id": "tk-ops", "name": "Правило 1", "codes": codes}] if codes else []
+            )
 
-        old_theme = self.app.app_settings.get("theme", "cosmo")
-        new_theme = self.theme_var.get().strip() or old_theme
+        old_theme = normalize_theme_name(self.app.app_settings.get("theme"))
+        new_theme = normalize_theme_name(self.theme_var.get() or old_theme)
 
         self.app.app_settings.update(
             {
@@ -193,6 +213,7 @@ class SettingsDialog(tk.Toplevel):
                 "kslp_age_max": age_max,
                 "kslp_senior_age": senior,
                 "kslp_operations_codes": codes,
+                "kslp_rules": kslp_rules,
                 "preferred_department": self.dept_var.get().strip(),
                 "github_repo": self.repo_var.get().strip(),
                 "check_updates_on_start": self.check_updates_var.get(),
@@ -204,11 +225,24 @@ class SettingsDialog(tk.Toplevel):
             self.app.date_format_var.set(self.app.app_settings["date_format"])
 
         if new_theme != old_theme:
-            messagebox.showinfo(
-                "Настройки",
-                "Тема изменена. Перезапустите приложение для применения.",
-                parent=self,
-            )
+            try:
+                register_slice_themes()
+                self.app.style.theme_use(new_theme)
+                apply_slice_chrome(self.app.style, new_theme)
+                if hasattr(self.app, "_apply_window_chrome"):
+                    self.app._apply_window_chrome(new_theme)
+                if hasattr(self.app, "theme_btn"):
+                    self.app.theme_btn.configure(text=self.app._theme_button_label())
+                if hasattr(self.app.lor_frame, "refresh_theme"):
+                    self.app.lor_frame.refresh_theme()
+                if hasattr(self.app.ksg_frame, "refresh_theme"):
+                    self.app.ksg_frame.refresh_theme()
+            except Exception:
+                messagebox.showinfo(
+                    "Настройки",
+                    "Тема сохранена. Перезапустите приложение для полного применения.",
+                    parent=self,
+                )
 
         messagebox.showinfo(
             "Настройки",

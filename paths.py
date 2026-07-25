@@ -1,12 +1,16 @@
-"""Пути к ресурсам приложения (скрипт / frozen)."""
+"""Пути к ресурсам приложения (скрипт / frozen / Electron sidecar)."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 
 def get_base_dir() -> Path:
-    """Папка приложения: рядом с .exe (frozen) или корень проекта."""
+    """Папка приложения: ANALIZ_BASE_DIR, рядом с .exe (frozen) или корень проекта."""
+    env = os.environ.get("ANALIZ_BASE_DIR")
+    if env:
+        return Path(env).resolve()
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent

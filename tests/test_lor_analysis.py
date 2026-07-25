@@ -26,7 +26,17 @@ def _sample_row(**overrides):
 
 
 def test_format_doctor_name():
-    assert format_doctor_name("Петров Пётр Сидорович") == "Петров П. С."
+    assert format_doctor_name("Петров Пётр Сидорович") == "Петров П.С."
+    assert format_doctor_name("Салихов Дмитрий Александрович") == "Салихов Д.А."
+    assert format_doctor_name("Салихов Д.А.") == "Салихов Д.А."
+    assert format_doctor_name("Салихов Д. А.") == "Салихов Д.А."
+    assert format_doctor_name("САЛИХОВ ДМИТРИЙ АЛЕКСАНДРОВИЧ") == "САЛИХОВ Д.А."
+    # табельный номер + Имя Отчество Фамилия (как в выгрузке КСГ)
+    assert format_doctor_name("022201 Дмитрий Николаевич Салихов") == "Салихов Д.Н."
+    assert format_doctor_name("022201 Д.Н. Салихов") == "Салихов Д.Н."
+    assert format_doctor_name("022201 Салихов Дмитрий Николаевич") == "Салихов Д.Н."
+    assert format_doctor_name("022201 / Белов Дмитрий Геннадьевич") == "Белов Д.Г."
+    assert format_doctor_name("022201/ Белов Дмитрий Геннадьевич") == "Белов Д.Г."
     assert format_doctor_name("") == "неизвестно"
 
 
@@ -118,4 +128,28 @@ def test_filter_by_department_exact():
     filtered = filter_by_department(df, "ЛОР")
     assert len(filtered) == 1
     assert prepare_lor_dataframe(filtered)["Возраст"].iloc[0] == 40
+
+
+def test_long_stay_threshold_and_summary():
+    from lor_analysis import format_violations_summary_sections
+
+    df = pd.DataFrame(
+        [
+            _sample_row(
+                **{
+                    "Номер КВС": "КВС-L",
+                    "Всего дней проведено в стационаре (от поступления до исхода в днях)": "10",
+                }
+            ),
+        ]
+    )
+    default = analyze_lor(df)
+    assert "Длительная госпитализация" in set(default.violations_df["тип_нарушения"])
+
+    strict = analyze_lor(df, {"long_stay_days": 15})
+    assert "Длительная госпитализация" not in set(strict.violations_df["тип_нарушения"].tolist())
+
+    sections = format_violations_summary_sections(default.violations_df, long_stay_days=7)
+    assert sections
+    assert any("КВС-L" in s["text"] for s in sections)
 

@@ -7,6 +7,9 @@ dist/
 build/
 *.spec
 AppIcon.ico
+desktop/dist/
+desktop/release/
+desktop/node_modules/
 
 # Данные пациентов / локальные отчёты
 *.xlsx

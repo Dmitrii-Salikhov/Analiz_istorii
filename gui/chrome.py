@@ -7,9 +7,22 @@ from typing import Callable, Sequence
 
 import ttkbootstrap as ttkb
 
+from gui.ui_theme import FONT_SANS, SLICE_TOKENS_DARK, tokens_for_theme
+
 ACCENT = "primary"
 PRIMARY_PAD = (22, 10)
 SECONDARY_PAD = (12, 6)
+
+
+def _tokens_from_widget(widget) -> dict[str, str]:
+    try:
+        root = widget.winfo_toplevel()
+        settings = getattr(root, "app_settings", None)
+        if isinstance(settings, dict):
+            return tokens_for_theme(settings.get("theme"))
+    except Exception:
+        pass
+    return SLICE_TOKENS_DARK
 
 
 def hotkey_hint(mac: str, win: str | None = None) -> str:
@@ -54,6 +67,7 @@ class ToolTip:
     def _show(self):
         if self._tip or not self.text:
             return
+        tokens = _tokens_from_widget(self.widget)
         x = self.widget.winfo_rootx() + 12
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
         self._tip = tw = tk.Toplevel(self.widget)
@@ -63,9 +77,11 @@ class ToolTip:
             tw,
             text=self.text,
             justify=tk.LEFT,
-            background="#2C3E50",
-            foreground="white",
-            relief=tk.SOLID,
+            background=tokens["bg_elevated"],
+            foreground=tokens["text"],
+            highlightbackground=tokens["border"],
+            highlightthickness=1,
+            relief=tk.FLAT,
             borderwidth=0,
             font=("Segoe UI", 9),
             padx=8,
@@ -91,6 +107,7 @@ def show_toast(root, message: str, duration_ms: int = 1600) -> None:
     """Короткое уведомление без кнопки OK."""
     if root is None:
         return
+    tokens = _tokens_from_widget(root)
     toast = tk.Toplevel(root)
     toast.overrideredirect(True)
     toast.attributes("-topmost", True)
@@ -103,9 +120,22 @@ def show_toast(root, message: str, duration_ms: int = 1600) -> None:
     except tk.TclError:
         rw = rh = 400
         rx = ry = 100
-    frame = ttkb.Frame(toast, bootstyle="dark", padding=(14, 10))
+    frame = tk.Frame(
+        toast,
+        background=tokens["bg_elevated"],
+        highlightbackground=tokens["border"],
+        highlightthickness=1,
+        padx=14,
+        pady=10,
+    )
     frame.pack(fill=tk.BOTH, expand=True)
-    ttkb.Label(frame, text=message, bootstyle="inverse-dark", font=("Segoe UI", 10)).pack()
+    tk.Label(
+        frame,
+        text=message,
+        background=tokens["bg_elevated"],
+        foreground=tokens["text"],
+        font=FONT_SANS,
+    ).pack()
     toast.update_idletasks()
     tw = toast.winfo_reqwidth()
     th = toast.winfo_reqheight()
@@ -129,21 +159,38 @@ def notify_copied(host, message: str = "Скопировано") -> None:
 
 def make_kpi_card(parent, title: str, value: str, on_click=None) -> ttkb.Frame:
     """Карточка показателя с hover и опциональным кликом."""
-    card = ttkb.Frame(parent, bootstyle="light", padding=14)
-    title_lbl = ttkb.Label(card, text=title, font=("Calibri", 12), bootstyle="secondary")
+    tokens = _tokens_from_widget(parent)
+    card = ttkb.Frame(parent, style="SliceElevated.TFrame", padding=14)
+    title_lbl = ttkb.Label(
+        card,
+        text=title,
+        font=FONT_SANS,
+        bootstyle="secondary",
+        background=tokens["bg_elevated"],
+        foreground=tokens["text_muted"],
+    )
     title_lbl.pack(anchor=tk.W)
-    value_lbl = ttkb.Label(card, text=value, font=("Calibri", 22, "bold"), bootstyle="primary")
+    value_lbl = ttkb.Label(
+        card,
+        text=value,
+        font=("Segoe UI", 20, "bold"),
+        bootstyle="primary",
+        background=tokens["bg_elevated"],
+        foreground=tokens["accent"],
+    )
     value_lbl.pack(anchor=tk.W, pady=(4, 0))
 
     def _enter(_e=None):
         try:
-            card.configure(bootstyle="info")
+            for w in (card, title_lbl, value_lbl):
+                w.configure(background=tokens["bg_panel"])
         except tk.TclError:
             pass
 
     def _leave(_e=None):
         try:
-            card.configure(bootstyle="light")
+            for w in (card, title_lbl, value_lbl):
+                w.configure(background=tokens["bg_elevated"])
         except tk.TclError:
             pass
 
@@ -243,8 +290,8 @@ def build_context_bar(
     parent,
     titles: Sequence[tuple[str, str]] | None = None,
 ) -> tuple[ttkb.Frame, dict[str, ttkb.Label]]:
-    """Компактная серая строка статуса. titles: [(key, title), ...]."""
-    bar = ttkb.Frame(parent, bootstyle="secondary", padding=(10, 6))
+    """Компактная строка статуса. titles: [(key, title), ...]."""
+    bar = ttkb.Frame(parent, style="SlicePanel.TFrame", padding=(10, 6))
     labels: dict[str, ttkb.Label] = {}
     items = list(titles) if titles else [
         ("file", "Файл"),
@@ -253,7 +300,7 @@ def build_context_bar(
         ("stat", "Показатель"),
     ]
     for key, title in items:
-        cell = ttkb.Frame(bar)
+        cell = ttkb.Frame(bar, style="SlicePanel.TFrame")
         cell.pack(side=tk.LEFT, padx=(0, 18))
         ttkb.Label(cell, text=title, font=("Segoe UI", 8), bootstyle="secondary").pack(anchor=tk.W)
         lbl = ttkb.Label(cell, text="—", font=("Consolas", 10, "bold"))
@@ -322,7 +369,7 @@ def export_sections_dialog(parent, sections: dict[str, tk.BooleanVar], title: st
     dialog.grab_set()
     dialog.resizable(False, False)
 
-    ttkb.Label(dialog, text="Включить в отчёт:", font=("Calibri", 12)).pack(
+    ttkb.Label(dialog, text="Включить в отчёт:", font=FONT_SANS).pack(
         padx=20, pady=(16, 8), anchor=tk.W
     )
     body = ttkb.Frame(dialog, padding=(20, 0))
