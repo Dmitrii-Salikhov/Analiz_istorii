@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('analiz', {
   openPath: (filePath) => ipcRenderer.invoke('shell:openPath', filePath),
   getAppVersion: () => ipcRenderer.invoke('app:getVersion'),
   getBridgeStatus: () => ipcRenderer.invoke('bridge:status'),
+  approveLoadPaths: (paths) => ipcRenderer.invoke('paths:approveLoad', paths),
   getPathForFile: (file) => {
     try {
       return webUtils.getPathForFile(file);

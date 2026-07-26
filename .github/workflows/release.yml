@@ -84,6 +84,7 @@ jobs:
             --hidden-import changelog `
             --hidden-import updater `
             --hidden-import config_store `
+            --hidden-import report_profiles `
             --hidden-import excel_io `
             --hidden-import lor_analysis `
             --hidden-import ksg_analysis `

@@ -2,6 +2,14 @@ const { app, BrowserWindow, dialog, ipcMain, shell, session } = require('electro
 const path = require('node:path');
 const fs = require('node:fs');
 const { PythonBridge } = require('./pythonBridge.cjs');
+const {
+  approvePath,
+  approveLoadPaths,
+  assertRpcMethod,
+  gateRpcParams,
+  assertSafeExternalUrl,
+  assertApprovedOpenPath,
+} = require('./bridgeSecurity.cjs');
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -16,7 +24,7 @@ function applyCsp() {
   const isDev = !!process.env.VITE_DEV_SERVER_URL;
   const csp = isDev
     ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:* ws://localhost:* http://localhost:*; object-src 'none'; base-uri 'self';"
-    : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self';";
+    : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'self';";
 
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const headers = { ...details.responseHeaders };
@@ -63,7 +71,14 @@ function createWindow() {
 
 function registerIpc() {
   ipcMain.handle('bridge:rpc', async (_e, method, params) => {
-    return bridge.rpc(String(method), params || {});
+    const m = assertRpcMethod(method);
+    const gated = gateRpcParams(m, params || {});
+    const result = await bridge.rpc(m, gated);
+    // Export may return a resolved path — allow opening it afterwards
+    if ((m === 'emk.export' || m === 'ksg.export') && result && result.path) {
+      approvePath(String(result.path));
+    }
+    return result;
   });
 
   ipcMain.handle('bridge:status', async () => {
@@ -86,6 +101,11 @@ function registerIpc() {
     return app.getVersion();
   });
 
+  ipcMain.handle('paths:approveLoad', async (_e, paths) => {
+    const list = Array.isArray(paths) ? paths : paths ? [paths] : [];
+    return approveLoadPaths(list);
+  });
+
   ipcMain.handle('dialog:openExcel', async (_e, opts = {}) => {
     const multi = !!opts.multiSelections;
     const res = await dialog.showOpenDialog(mainWindow, {
@@ -94,7 +114,8 @@ function registerIpc() {
       filters: [{ name: 'Excel', extensions: ['xlsx', 'xls'] }],
     });
     if (res.canceled || !res.filePaths.length) return multi ? [] : null;
-    return multi ? res.filePaths : res.filePaths[0];
+    const approved = approveLoadPaths(res.filePaths);
+    return multi ? approved : approved[0] || null;
   });
 
   ipcMain.handle('dialog:saveExcel', async (_e, opts = {}) => {
@@ -104,7 +125,7 @@ function registerIpc() {
       filters: [{ name: 'Excel', extensions: ['xlsx'] }],
     });
     if (res.canceled || !res.filePath) return null;
-    return res.filePath;
+    return approvePath(res.filePath);
   });
 
   ipcMain.handle('dialog:saveText', async (_e, opts = {}) => {
@@ -114,15 +135,17 @@ function registerIpc() {
       filters: [{ name: 'Text', extensions: ['txt'] }],
     });
     if (res.canceled || !res.filePath) return null;
-    return res.filePath;
+    return approvePath(res.filePath);
   });
 
   ipcMain.handle('shell:openPath', async (_e, filePath) => {
-    return shell.openPath(String(filePath));
+    const p = assertApprovedOpenPath(filePath);
+    return shell.openPath(p);
   });
 
   ipcMain.handle('shell:openExternal', async (_e, url) => {
-    await shell.openExternal(String(url));
+    const safe = assertSafeExternalUrl(url);
+    await shell.openExternal(safe);
   });
 }
 

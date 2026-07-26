@@ -44,7 +44,8 @@ def test_real_lor_excel_pipeline():
 def test_real_ksg_excel_pipeline():
     files = list(ROOT.glob("*КСГ*.xlsx")) + list(ROOT.glob("*Ксг*.xlsx")) + list(ROOT.glob("*ксг*.xlsx"))
     path = files[0]
-    df = load_ksg_excel(str(path))
+    loaded = load_ksg_excel(str(path))
+    df = loaded.dataframe
     ref, _ = load_reference()
     result = analyze_ksg(
         df,

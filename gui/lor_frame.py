@@ -233,7 +233,7 @@ class LorReportFrame(ttkb.Frame):
         self._show_work_content(False)
 
         def work(progress):
-            return load_lor_excel(file_path, progress=progress)
+            return load_lor_excel(file_path, progress=progress, config=self.app.app_settings)
 
         def on_success(result):
             self.df_full = result.dataframe

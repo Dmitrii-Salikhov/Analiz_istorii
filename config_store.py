@@ -78,12 +78,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "kslp": True,
         },
     },
+    "report_profiles": None,  # filled below via normalize — placeholder replaced
     "recent_emk": [],
     "recent_ksg": [],
     "last_main_tab": 0,
     "last_seen_version": None,
     "pending_update_from": None,
 }
+
+# Avoid circular import at module load for DEFAULT — set after import
+from report_profiles import DEFAULT_REPORT_PROFILES  # noqa: E402
+
+DEFAULT_CONFIG["report_profiles"] = deepcopy(DEFAULT_REPORT_PROFILES)
 
 
 def config_path() -> Path:
@@ -134,6 +140,9 @@ def load_config() -> dict[str, Any]:
     if not (isinstance(file_ui, dict) and "main_tab" in file_ui):
         ui_base["main_tab"] = "ksg" if int(cfg.get("last_main_tab") or 0) == 1 else "emk"
     cfg["ui_prefs"] = ui_base
+    from report_profiles import normalize_report_profiles
+
+    cfg["report_profiles"] = normalize_report_profiles(cfg.get("report_profiles"))
     cfg["kslp_rules"] = _normalize_kslp_rules(cfg)
     # keep flat codes in sync with first rule for older UI / callers
     rules = cfg.get("kslp_rules") or []
@@ -176,6 +185,10 @@ def _normalize_kslp_rules(cfg: dict[str, Any]) -> list[dict[str, Any]]:
 
 def save_config(config: dict[str, Any]) -> None:
     path = config_path()
+    from report_profiles import normalize_report_profiles
+
+    if "report_profiles" in config:
+        config["report_profiles"] = normalize_report_profiles(config.get("report_profiles"))
     config["kslp_rules"] = _normalize_kslp_rules(config)
     rules = config.get("kslp_rules") or []
     if rules and isinstance(rules[0], dict) and rules[0].get("codes"):

@@ -125,6 +125,30 @@ function Kpi({ title, value }: { title: string; value: string }) {
   );
 }
 
+type ColumnMapping = {
+  matched?: { file: string; canonical: string }[];
+  missing?: string[];
+  unused_headers?: string[];
+};
+
+function activeProfileLabel(cfg: AppConfig, kind: 'emk' | 'ksg'): string {
+  const rp = cfg.report_profiles;
+  if (!rp) return kind === 'emk' ? 'ЭМК стандарт' : 'КСГ стандарт';
+  const activeId = (kind === 'emk' ? rp.emk_active : rp.ksg_active) || 'default';
+  const bucket = kind === 'emk' ? rp.emk : rp.ksg;
+  const name = bucket?.[activeId]?.name;
+  return name || activeId;
+}
+
+function mappingStatusSuffix(
+  profileName: string | undefined,
+  mapping: ColumnMapping | null | undefined,
+): string {
+  const matched = mapping?.matched?.length ?? 0;
+  const name = profileName || 'профиль';
+  return `Профиль: ${name} · сопоставлено ${matched} полей`;
+}
+
 export default function App() {
   const [version, setVersion] = useState('?.?.?');
   const [theme, setTheme] = useState<Theme>('dark');
@@ -156,6 +180,7 @@ export default function App() {
   const [compareCharts, setCompareCharts] = useState<CompareChartsState>(DEFAULT_COMPARE_CHARTS);
   const [dragOver, setDragOver] = useState(false);
   const [copyFlash, setCopyFlash] = useState(false);
+  const [loadMappingHint, setLoadMappingHint] = useState<string | null>(null);
   const prefsReady = useRef(false);
   const persistTimer = useRef<number | null>(null);
 
@@ -276,6 +301,9 @@ export default function App() {
         departments: string[];
         preferred_department: string;
         known_departments?: string[];
+        profile_id?: string;
+        profile_name?: string;
+        mapping?: ColumnMapping;
       }>('emk.load', { path });
       setEmkFile(loaded.file_name);
       setDepartments(loaded.departments);
@@ -287,7 +315,9 @@ export default function App() {
       const analysis = await rpc<EmkAnalysis>('emk.analyze', { department: dept });
       setEmk(analysis);
       setTab('emk');
-      setStatus(`ЭМК: ${loaded.file_name}`);
+      const mapHint = mappingStatusSuffix(loaded.profile_name, loaded.mapping);
+      setLoadMappingHint(mapHint);
+      setStatus(`ЭМК: ${loaded.file_name} · ${mapHint}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStatus('Ошибка загрузки ЭМК');
@@ -331,6 +361,8 @@ export default function App() {
       let files: KsgFile[] = [];
       let active = 0;
       let ref = '';
+      let lastProfile: string | undefined;
+      let lastMapping: ColumnMapping | undefined;
       for (const path of list) {
         setStatus(`Загрузка КСГ: ${path.split(/[/\\]/).pop()}`);
         const res = await rpc<{
@@ -338,11 +370,16 @@ export default function App() {
           active: number;
           reference_status: string;
           analysis: KsgAnalysis;
+          profile_id?: string;
+          profile_name?: string;
+          mapping?: ColumnMapping;
         }>('ksg.load', { path });
         files = res.files;
         active = res.active;
         ref = res.reference_status;
         lastAnalysis = res.analysis;
+        lastProfile = res.profile_name;
+        lastMapping = res.mapping;
       }
       setKsgFiles(files);
       setKsgActive(active);
@@ -350,7 +387,9 @@ export default function App() {
       setKsg(lastAnalysis);
       setCompare(null);
       setTab('ksg');
-      setStatus(`КСГ: ${files.length} файл(ов)`);
+      const mapHint = mappingStatusSuffix(lastProfile, lastMapping);
+      setLoadMappingHint(mapHint);
+      setStatus(`КСГ: ${files.length} файл(ов) · ${mapHint}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStatus('Ошибка загрузки КСГ');
@@ -506,10 +545,16 @@ export default function App() {
         setError('Перетащите Excel-файлы (.xlsx / .xls)');
         return;
       }
-      if (tab === 'ksg' || paths.length > 1) {
-        await loadKsgFromPaths(paths);
+      const approve = api().approveLoadPaths;
+      const approved = approve ? await approve(paths) : paths;
+      if (!approved.length) {
+        setError('Не удалось подтвердить пути файлов');
+        return;
+      }
+      if (tab === 'ksg' || approved.length > 1) {
+        await loadKsgFromPaths(approved);
       } else {
-        await loadEmkFromPath(paths[0]);
+        await loadEmkFromPath(approved[0]);
       }
     },
     [tab, loadEmkFromPath, loadKsgFromPaths],
@@ -640,6 +685,9 @@ export default function App() {
 
       <main className="workspace">
         {error && <div className="error-banner">{error}</div>}
+        {!error && loadMappingHint && (emk || ksgFiles.length > 0) && (
+          <div className="mapping-banner">{loadMappingHint}</div>
+        )}
 
         {tab === 'emk' && (
           <>
@@ -647,6 +695,9 @@ export default function App() {
               <button className="btn btn-primary" type="button" disabled={busy} onClick={loadEmk}>
                 Загрузить Excel
               </button>
+              <span className="muted toolbar-profile" title="Активный профиль формата ЭМК">
+                {activeProfileLabel(config, 'emk')}
+              </span>
               <button
                 className="btn"
                 type="button"
@@ -817,6 +868,9 @@ export default function App() {
               <button className="btn btn-primary" type="button" disabled={busy} onClick={loadKsg}>
                 Загрузить КСГ
               </button>
+              <span className="muted toolbar-profile" title="Активный профиль формата КСГ">
+                {activeProfileLabel(config, 'ksg')}
+              </span>
               <button
                 className="btn"
                 type="button"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ import pandas as pd
 
 from config_store import load_config, push_recent_file, save_config
 from excel_io import list_departments, load_ksg_excel, load_lor_excel, pick_default_department
+from report_profiles import get_active_profile
 from export_reports import (
     EMK_SECTIONS,
     export_emk_excel,
@@ -193,12 +195,60 @@ def config_get(_params: dict[str, Any]) -> dict[str, Any]:
     return {"config": load_config()}
 
 
+# Keys the Electron UI may update via config.set (defense in depth).
+_CONFIG_SET_ALLOWED = frozenset(
+    {
+        "date_format",
+        "theme",
+        "ksg_threshold_low",
+        "ksg_threshold_high",
+        "kslp_age_min",
+        "kslp_age_max",
+        "kslp_senior_age",
+        "long_stay_days",
+        "kslp_operations_codes",
+        "kslp_rules",
+        "preferred_department",
+        "known_departments",
+        "github_repo",
+        "check_updates_on_start",
+        "emk_display",
+        "ksg_display",
+        "ui_prefs",
+        "last_main_tab",
+        "window_geometry",
+        "report_profiles",
+    }
+)
+
+
+def _validate_github_repo(value: Any) -> str:
+    repo = str(value or "").strip()
+    if not repo:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        raise ValueError("github_repo: ожидается формат owner/repo")
+    return repo
+
+
 def config_set(params: dict[str, Any]) -> dict[str, Any]:
     patch = params.get("config") or {}
     if not isinstance(patch, dict):
         raise ValueError("config must be an object")
     cfg = load_config()
-    cfg.update(patch)
+    for key, value in patch.items():
+        if key not in _CONFIG_SET_ALLOWED:
+            continue
+        if key == "github_repo":
+            cfg[key] = _validate_github_repo(value)
+        elif key in ("emk_display", "ksg_display", "ui_prefs") and not isinstance(value, dict):
+            raise ValueError(f"{key} must be an object")
+        elif key == "kslp_rules" and not isinstance(value, list):
+            raise ValueError("kslp_rules must be a list")
+        elif key == "report_profiles" and not isinstance(value, dict):
+            raise ValueError("report_profiles must be an object")
+        else:
+            cfg[key] = value
     preferred = str(cfg.get("preferred_department") or "").strip()
     if preferred:
         known = list(cfg.get("known_departments") or [])
@@ -210,13 +260,12 @@ def config_set(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def emk_load(params: dict[str, Any]) -> dict[str, Any]:
-    path = Path(str(params.get("path") or "")).expanduser().resolve()
-    if not path.exists():
-        raise FileNotFoundError(f"Файл не найден: {path}")
-    loaded = load_lor_excel(str(path))
+    path = _assert_excel_path(params.get("path"))
+    cfg = load_config()
+    profile = get_active_profile(cfg, "emk")
+    loaded = load_lor_excel(str(path), profile=profile, config=cfg)
     df = loaded.dataframe
     departments = list_departments(df)
-    cfg = load_config()
     preferred = pick_default_department(departments, cfg.get("preferred_department"))
     known = list(cfg.get("known_departments") or [])
     for d in departments:
@@ -231,6 +280,7 @@ def emk_load(params: dict[str, Any]) -> dict[str, Any]:
     _EMK["department"] = ""
     push_recent_file(cfg, "recent_emk", str(path))
     save_config(cfg)
+    mapping = loaded.mapping.to_dict() if loaded.mapping else None
     return {
         "path": str(path),
         "file_name": path.name,
@@ -239,6 +289,9 @@ def emk_load(params: dict[str, Any]) -> dict[str, Any]:
         "known_departments": known,
         "rows": int(len(df)),
         "sheet_name": loaded.sheet_name,
+        "profile_id": profile.get("id"),
+        "profile_name": profile.get("name"),
+        "mapping": mapping,
     }
 
 
@@ -274,14 +327,30 @@ def emk_violations_summary(_params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _assert_excel_path(raw: Any) -> Path:
+    path = Path(str(raw or "")).expanduser().resolve()
+    if path.suffix.lower() not in {".xlsx", ".xls", ".xlsm"}:
+        raise ValueError("Разрешены только файлы Excel (.xlsx / .xls)")
+    if not path.is_file():
+        raise FileNotFoundError(f"Файл не найден: {path}")
+    return path
+
+
+def _assert_export_path(raw: Any) -> Path:
+    path = Path(str(raw or "")).expanduser().resolve()
+    if path.suffix.lower() not in {".xlsx", ".txt"}:
+        raise ValueError("Разрешены только .xlsx или .txt")
+    if not path.parent.is_dir():
+        raise FileNotFoundError(f"Папка не найдена: {path.parent}")
+    return path
+
+
 def emk_export(params: dict[str, Any]) -> dict[str, Any]:
     result = _EMK.get("analysis")
     if result is None:
         raise RuntimeError("Сначала выполните анализ ЭМК")
     fmt = str(params.get("format") or "xlsx").lower()
-    path = Path(str(params.get("path") or "")).expanduser()
-    if not path.parent.exists():
-        raise FileNotFoundError(f"Папка не найдена: {path.parent}")
+    path = _assert_export_path(params.get("path"))
     sections = params.get("sections")
     if sections is not None and not isinstance(sections, dict):
         raise ValueError("sections must be an object")
@@ -303,12 +372,12 @@ def emk_sections(_params: dict[str, Any]) -> dict[str, Any]:
 
 
 def ksg_load(params: dict[str, Any]) -> dict[str, Any]:
-    path = Path(str(params.get("path") or "")).expanduser().resolve()
-    if not path.exists():
-        raise FileNotFoundError(f"Файл не найден: {path}")
-    df = load_ksg_excel(str(path))
-    ref, status = _ensure_ksg_reference()
+    path = _assert_excel_path(params.get("path"))
     cfg = load_config()
+    profile = get_active_profile(cfg, "ksg")
+    loaded = load_ksg_excel(str(path), profile=profile, config=cfg)
+    df = loaded.dataframe
+    ref, status = _ensure_ksg_reference()
     results = analyze_ksg(df, ref, cfg)
     label = short_month_label(path.name, df)
     item = {
@@ -317,6 +386,9 @@ def ksg_load(params: dict[str, Any]) -> dict[str, Any]:
         "df": df,
         "results": results,
         "label": label,
+        "mapping": loaded.mapping.to_dict() if loaded.mapping else None,
+        "profile_id": profile.get("id"),
+        "profile_name": profile.get("name"),
     }
     # replace if same path
     files = [f for f in _KSG["files"] if f.get("path") != str(path)]
@@ -333,6 +405,9 @@ def ksg_load(params: dict[str, Any]) -> dict[str, Any]:
         "active": _KSG["active"],
         "reference_status": status,
         "analysis": _ksg_analyze_payload(results),
+        "profile_id": profile.get("id"),
+        "profile_name": profile.get("name"),
+        "mapping": loaded.mapping.to_dict() if loaded.mapping else None,
     }
 
 
@@ -393,9 +468,7 @@ def ksg_export(params: dict[str, Any]) -> dict[str, Any]:
         raise IndexError("Неверный индекс файла КСГ")
     item = _KSG["files"][idx]
     fmt = str(params.get("format") or "xlsx").lower()
-    path = Path(str(params.get("path") or "")).expanduser()
-    if not path.parent.exists():
-        raise FileNotFoundError(f"Папка не найдена: {path.parent}")
+    path = _assert_export_path(params.get("path"))
     cfg = load_config()
     if fmt in ("txt", "text"):
         saved = export_ksg_txt(

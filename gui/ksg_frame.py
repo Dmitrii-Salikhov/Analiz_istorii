@@ -259,9 +259,11 @@ class KsgReportFrame(ttkb.Frame):
             fp = queue.pop(0)
 
             def work(progress):
-                return load_ksg_excel(fp, progress=progress)
+                cfg = self.app.app_settings
+                return load_ksg_excel(fp, progress=progress, config=cfg)
 
-            def on_success(df):
+            def on_success(loaded):
+                df = loaded.dataframe if hasattr(loaded, "dataframe") else loaded
                 name = Path(fp).name
                 results = analyze_ksg(df, self.reference, self.app.app_settings)
                 self.loaded_files.append(
@@ -290,9 +292,10 @@ class KsgReportFrame(ttkb.Frame):
             return
 
         def work(progress):
-            return load_ksg_excel(file_path, progress=progress)
+            return load_ksg_excel(file_path, progress=progress, config=self.app.app_settings)
 
-        def on_success(df):
+        def on_success(loaded):
+            df = loaded.dataframe if hasattr(loaded, "dataframe") else loaded
             name = Path(file_path).name
             results = analyze_ksg(df, self.reference, self.app.app_settings)
             self.loaded_files.append(

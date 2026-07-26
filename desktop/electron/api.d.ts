@@ -10,6 +10,8 @@ export type AnalizApi = {
   openExternal: (url: string) => Promise<void>;
   getAppVersion: () => Promise<string>;
   getBridgeStatus: () => Promise<{ ok: boolean; detail?: string }>;
+  /** Confirm Excel paths from drag-and-drop before emk.load / ksg.load */
+  approveLoadPaths?: (paths: string[]) => Promise<string[]>;
   getPathForFile?: (file: File) => string | null;
 };
 

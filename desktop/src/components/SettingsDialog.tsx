@@ -14,6 +14,21 @@ export type KslpRule = {
   codes: string[];
 };
 
+export type ReportProfile = {
+  id: string;
+  name?: string;
+  header_fragments?: string[];
+  required_columns?: string[];
+  aliases?: Record<string, string[]>;
+};
+
+export type ReportProfilesConfig = {
+  emk_active?: string;
+  ksg_active?: string;
+  emk?: Record<string, ReportProfile>;
+  ksg?: Record<string, ReportProfile>;
+};
+
 export type AppConfig = {
   date_format?: string;
   theme?: string;
@@ -43,6 +58,7 @@ export type AppConfig = {
       kslp?: boolean;
     };
   };
+  report_profiles?: ReportProfilesConfig;
 };
 
 const EMK_KPI: [string, string][] = [
@@ -77,7 +93,7 @@ const KSG_SECTIONS: [string, string][] = [
   ['section_compare', 'Раздел: сравнение месяцев'],
 ];
 
-type TabId = 'display' | 'levels' | 'kslp' | 'department' | 'system';
+type TabId = 'display' | 'levels' | 'kslp' | 'formats' | 'department' | 'system';
 
 function codesKey(codes: string[]): string {
   return [...codes].map((c) => c.trim()).filter(Boolean).sort().join('|');
@@ -133,6 +149,7 @@ export function SettingsDialog({
   const [draftName, setDraftName] = useState('');
   const [ruleError, setRuleError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [formatKind, setFormatKind] = useState<'emk' | 'ksg'>('emk');
 
   const opLabel = useMemo(() => {
     const map = new Map<string, string>();
@@ -246,6 +263,7 @@ export function SettingsDialog({
             ['display', 'Отображение'],
             ['levels', 'Пороги'],
             ['kslp', 'КСЛП'],
+            ['formats', 'Форматы'],
             ['department', 'Отделение'],
             ['system', 'Система'],
           ] as const
@@ -442,6 +460,137 @@ export function SettingsDialog({
           </div>
         </div>
       )}
+
+      {tab === 'formats' && (() => {
+        const rp = cfg.report_profiles || {};
+        const activeKey = formatKind === 'emk' ? 'emk_active' : 'ksg_active';
+        const bucket = formatKind === 'emk' ? 'emk' : 'ksg';
+        const activeId = (rp[activeKey] as string) || 'default';
+        const profiles = (rp[bucket] as Record<string, ReportProfile>) || {};
+        const profileIds = Object.keys(profiles).length
+          ? Object.keys(profiles)
+          : ['default'];
+        const profile = profiles[activeId] || profiles.default || {
+          id: activeId,
+          name: activeId,
+          aliases: {},
+        };
+        const aliases = profile.aliases || {};
+        const aliasKeys = Object.keys(aliases).sort((a, b) => a.localeCompare(b, 'ru'));
+
+        const patchProfiles = (next: ReportProfilesConfig) => {
+          set('report_profiles', next);
+        };
+
+        const setActiveProfile = (id: string) => {
+          patchProfiles({ ...rp, [activeKey]: id });
+        };
+
+        const setAliasText = (canon: string, text: string) => {
+          const list = text
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+          const nextAliases = { ...aliases, [canon]: list.length ? list : [canon] };
+          const nextProfile = { ...profile, id: profile.id || activeId, aliases: nextAliases };
+          patchProfiles({
+            ...rp,
+            [bucket]: { ...profiles, [activeId]: nextProfile },
+          });
+        };
+
+        const resetDefaults = () => {
+          if (
+            !window.confirm(
+              'Сбросить профили форматов к стандартным? Пользовательские алиасы будут удалены.',
+            )
+          ) {
+            return;
+          }
+          patchProfiles({
+            emk_active: 'default',
+            ksg_active: 'default',
+            emk: {},
+            ksg: {},
+          });
+        };
+
+        return (
+          <div className="form-grid">
+            <div className="form-row inline" style={{ gap: 16 }}>
+              <label className="inline">
+                <input
+                  type="radio"
+                  checked={formatKind === 'emk'}
+                  onChange={() => setFormatKind('emk')}
+                />
+                ЭМК
+              </label>
+              <label className="inline">
+                <input
+                  type="radio"
+                  checked={formatKind === 'ksg'}
+                  onChange={() => setFormatKind('ksg')}
+                />
+                КСГ
+              </label>
+            </div>
+            <div className="form-row">
+              <label>Активный профиль ({formatKind === 'emk' ? 'ЭМК' : 'КСГ'})</label>
+              <select
+                value={activeId}
+                onChange={(e) => setActiveProfile(e.target.value)}
+              >
+                {profileIds.map((id) => (
+                  <option key={id} value={id}>
+                    {profiles[id]?.name || id}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-row">
+              <label>
+                Синонимы колонок — {profile.name || activeId}
+              </label>
+              <p className="muted" style={{ margin: '0 0 8px' }}>
+                Каноническое имя → возможные заголовки в Excel (через запятую).
+              </p>
+              {aliasKeys.length === 0 ? (
+                <p className="muted">Нет алиасов в профиле (после сохранения подставятся стандартные).</p>
+              ) : (
+                <div className="alias-table-wrap">
+                  <table className="alias-table">
+                    <thead>
+                      <tr>
+                        <th>Канон</th>
+                        <th>Алиасы</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {aliasKeys.map((canon) => (
+                        <tr key={canon}>
+                          <td className="alias-table__canon">{canon}</td>
+                          <td>
+                            <input
+                              value={(aliases[canon] || []).join(', ')}
+                              onChange={(e) => setAliasText(canon, e.target.value)}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div className="form-row">
+              <button className="btn" type="button" onClick={resetDefaults}>
+                Сбросить к стандартным
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {tab === 'department' && (
         <div className="form-grid">
