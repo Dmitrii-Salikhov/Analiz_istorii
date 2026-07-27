@@ -226,7 +226,7 @@ class SettingsDialog(tk.Toplevel):
 
         if new_theme != old_theme:
             try:
-                register_slice_themes()
+                register_slice_themes(self.app.style)
                 self.app.style.theme_use(new_theme)
                 apply_slice_chrome(self.app.style, new_theme)
                 if hasattr(self.app, "_apply_window_chrome"):

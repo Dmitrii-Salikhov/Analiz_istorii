@@ -6,6 +6,15 @@ from updater import parse_version
 # Новые версии — в начале списка.
 CHANGELOG: list[dict] = [
     {
+        "version": "1.1.2",
+        "title": "Что нового в версии 1.1.2",
+        "items": [
+            "Исправлен запуск на Windows: ошибка ttkbootstrap "
+            "«single application root window» при старте Tkinter UI.",
+            "Регистрация тем Slice перенесена после создания главного окна.",
+        ],
+    },
+    {
         "version": "1.1.1",
         "title": "Что нового в версии 1.1.1",
         "items": [

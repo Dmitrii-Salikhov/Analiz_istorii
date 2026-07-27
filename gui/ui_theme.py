@@ -171,15 +171,18 @@ def _bootstrap_colors_from_tokens(tokens: dict[str, str]) -> dict[str, str]:
     }
 
 
-def register_slice_themes() -> None:
+def register_slice_themes(style=None) -> None:
     """Регистрирует slice-light / slice-dark в ttkbootstrap (один раз)."""
     global _SLICE_REGISTERED
     if _SLICE_REGISTERED:
         return
     from ttkbootstrap.style import ThemeDefinition
     import ttkbootstrap as ttkb
+    import tkinter as tk
 
-    style = ttkb.Style()
+    if style is None:
+        root = tk._default_root
+        style = ttkb.Style(master=root) if root is not None else ttkb.Style()
     existing = set(style.theme_names())
     definitions = [
         ThemeDefinition(

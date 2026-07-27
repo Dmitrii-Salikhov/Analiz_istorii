@@ -39,21 +39,27 @@ LOG_FILE = "errors.log"
 
 class App(ttkb.Window):
     def __init__(self):
-        register_slice_themes()
         self.app_settings = load_config()
         self.current_version = read_current_version()
         theme = normalize_theme_name(self.app_settings.get("theme"))
         self.app_settings["theme"] = theme
+        # slice-* темы регистрируются после создания root (ttkbootstrap — один root на процесс).
         super().__init__(
-            themename=theme,
+            themename="flatly",
             title=f"Анализ работы отделения — v{self.current_version}",
         )
+        register_slice_themes(self.style)
+        try:
+            self.style.theme_use(theme)
+        except tk.TclError:
+            theme = LIGHT_THEME
+            self.app_settings["theme"] = theme
+            self.style.theme_use(theme)
+        apply_slice_chrome(self.style, theme)
+        self._apply_window_chrome(theme)
         self.geometry(self.app_settings.get("window_geometry", "1400x850+100+100"))
         self.minsize(960, 640)
         self.resizable(True, True)
-
-        apply_slice_chrome(self.style, theme)
-        self._apply_window_chrome(theme)
 
         header = ttkb.Frame(self, style="Slice.TFrame", padding=(12, 10))
         header.pack(fill=tk.X)
@@ -185,7 +191,7 @@ class App(ttkb.Window):
         self.app_settings["theme"] = new_theme
         save_config(self.app_settings)
         try:
-            register_slice_themes()
+            register_slice_themes(self.style)
             self.style.theme_use(new_theme)
             apply_slice_chrome(self.style, new_theme)
             self._apply_window_chrome(new_theme)
