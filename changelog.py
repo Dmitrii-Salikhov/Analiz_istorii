@@ -6,6 +6,16 @@ from updater import parse_version
 # Новые версии — в начале списка.
 CHANGELOG: list[dict] = [
     {
+        "version": "1.1.3",
+        "title": "Что нового в версии 1.1.3",
+        "items": [
+            "Windows-сборка переведена на Electron UI (как в desktop/) "
+            "с Python sidecar для анализа.",
+            "При обновлении с 1.1.2 и раньше: удалите старую папку "
+            "и распакуйте zip заново (Tkinter → Electron).",
+        ],
+    },
+    {
         "version": "1.1.2",
         "title": "Что нового в версии 1.1.2",
         "items": [

@@ -36,14 +36,31 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
       - name: Set version from tag
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "$VERSION" > version.txt
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          export VERSION
+          node <<'NODE'
+          const fs = require('fs');
+          const version = process.env.VERSION;
+          if (!version) throw new Error('VERSION env missing');
+          const p = 'desktop/package.json';
+          const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+          j.version = version;
+          fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+          console.log('desktop/package.json ->', version);
+          NODE
 
-      - name: Install deps
+      - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -52,63 +69,47 @@ jobs:
       - name: Make Windows icon
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force -Path desktop\build | Out-Null
           python -c @"
           from PIL import Image
           img = Image.open('analytics.png').convert('RGBA')
           img.save('AppIcon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
-          print('AppIcon.ico created')
+          img.save('desktop/build/icon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
+          print('icons created')
           "@
 
-      - name: Build PyInstaller onedir
+      - name: Build Python sidecar
         shell: pwsh
         run: |
-          pyinstaller `
-            --noconfirm `
-            --clean `
-            --windowed `
-            --onedir `
-            --name AnalizIstorii `
-            --icon AppIcon.ico `
-            --add-data "version.txt;." `
-            --add-data "KSGoperacii.csv;." `
-            --hidden-import gui `
-            --hidden-import gui.app `
-            --hidden-import gui.lor_frame `
-            --hidden-import gui.ksg_frame `
-            --hidden-import gui.settings_dialog `
-            --hidden-import gui.widgets `
-            --hidden-import gui.helpers `
-            --hidden-import gui.ui_theme `
-            --hidden-import gui.chrome `
-            --hidden-import gui.whats_new `
-            --hidden-import changelog `
-            --hidden-import updater `
-            --hidden-import config_store `
-            --hidden-import report_profiles `
-            --hidden-import excel_io `
-            --hidden-import lor_analysis `
-            --hidden-import ksg_analysis `
-            --hidden-import paths `
-            --hidden-import certifi `
-            --hidden-import openpyxl `
-            --hidden-import matplotlib.backends.backend_tkagg `
-            --collect-all ttkbootstrap `
-            --collect-all matplotlib `
-            main.py
+          powershell -ExecutionPolicy Bypass -File desktop/scripts/build-backend.ps1
+          if (-not (Test-Path "desktop\backend\AnalizIstoriiBackend.exe")) {
+            Get-ChildItem -Recurse desktop\backend | Select-Object -First 40 FullName
+            throw "AnalizIstoriiBackend.exe missing in desktop/backend"
+          }
 
-      - name: Copy runtime files next to exe
-        shell: cmd
+      - name: Install Electron deps
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build Electron (win-unpacked)
+        working-directory: desktop
+        shell: pwsh
         run: |
-          copy /Y version.txt dist\AnalizIstorii\version.txt
-          copy /Y KSGoperacii.csv dist\AnalizIstorii\KSGoperacii.csv
-          if exist AppIcon.ico copy /Y AppIcon.ico dist\AnalizIstorii\AppIcon.ico
+          npm run build
+          npx electron-builder --win --x64 --dir
+          if (-not (Test-Path "release\win-unpacked\AnalizIstorii.exe")) {
+            Get-ChildItem -Recurse release | Select-Object -First 40 FullName
+            throw "AnalizIstorii.exe missing in win-unpacked"
+          }
+          # ensure runtime data next to exe (extraFiles may already copy these)
+          Copy-Item -Force ..\version.txt release\win-unpacked\version.txt
+          Copy-Item -Force ..\KSGoperacii.csv release\win-unpacked\KSGoperacii.csv
 
       - name: Create ZIP and SHA-256
         shell: pwsh
         run: |
-          # Архив содержимого папки (exe + _internal), без лишней вложенности —
-          # после распаковки сразу виден AnalizIstorii.exe
-          Set-Location dist\AnalizIstorii
+          $out = "desktop\release"
+          Set-Location "$out\win-unpacked"
           7z a -tzip ..\AnalizIstorii.zip *
           Set-Location ..
           $hash = (Get-FileHash AnalizIstorii.zip -Algorithm SHA256).Hash.ToLower()
@@ -120,11 +121,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/AnalizIstorii.zip
-            dist/AnalizIstorii.zip.sha256
+            desktop/release/AnalizIstorii.zip
+            desktop/release/AnalizIstorii.zip.sha256
           name: "Release ${{ github.ref_name }}"
           body: |
-            Автосборка Windows ${{ github.ref_name }}
+            Автосборка Windows ${{ github.ref_name }} — **Electron UI**
 
             ### Установка
             1. Скачайте `AnalizIstorii.zip`
@@ -133,9 +134,9 @@ jobs:
 
             Python устанавливать не нужно.
 
-            ### Если автообновление «откатывает» версию
-            Закройте программу, удалите старую папку и распакуйте этот zip заново
-            (или замените содержимое папки вручную). С версии 1.0.9 установщик обновлений исправлен.
+            ### Важно при обновлении с 1.1.2 и раньше
+            Старые сборки были на Tkinter. Для перехода на Electron лучше
+            **удалить старую папку** и распаковать zip заново (не поверх `_internal`).
 
             ### Проверка целостности
             Сверьте SHA-256 с файлом `AnalizIstorii.zip.sha256`.

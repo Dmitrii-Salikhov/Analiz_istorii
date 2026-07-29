@@ -25,7 +25,8 @@ npm run dev
 
 ```bash
 # 1) Python backend (PyInstaller) → desktop/backend/
-npm run backend   # или: bash desktop/scripts/build-backend.sh
+npm run backend          # macOS/Linux
+# npm run backend:win    # Windows (PowerShell)
 
 # 2) Electron unpack
 npm run dist:win
@@ -33,6 +34,8 @@ npm run dist:win
 ```
 
 Либо одной командой: `npm run dist:all`.
+
+Релизный zip на GitHub собирается CI из `win-unpacked` (Electron + sidecar), не из Tkinter.
 
 ## Архитектура
 

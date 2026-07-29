@@ -6,9 +6,11 @@ update.log
 dist/
 build/
 *.spec
+!desktop/analiz_backend.spec
 AppIcon.ico
 desktop/dist/
 desktop/release/
+desktop/backend/
 desktop/node_modules/
 
 # Данные пациентов / локальные отчёты

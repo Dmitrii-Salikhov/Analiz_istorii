@@ -99,6 +99,17 @@ def read_version_file(directory: Path) -> str | None:
             return internal.read_text(encoding="utf-8").strip()
     except OSError:
         pass
+    # Electron: resources/backend/_internal or next to backend exe
+    for rel in (
+        ("resources", "backend", "version.txt"),
+        ("resources", "backend", "_internal", "version.txt"),
+    ):
+        cand = Path(directory).joinpath(*rel)
+        try:
+            if cand.exists():
+                return cand.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
     return None
 
 
