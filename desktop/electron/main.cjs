@@ -75,7 +75,7 @@ function registerIpc() {
     const gated = gateRpcParams(m, params || {});
     const result = await bridge.rpc(m, gated);
     // Export may return a resolved path — allow opening it afterwards
-    if ((m === 'emk.export' || m === 'ksg.export') && result && result.path) {
+    if ((m === 'emk.export' || m === 'ksg.export' || m === 'ops.export') && result && result.path) {
       approvePath(String(result.path));
     }
     return result;

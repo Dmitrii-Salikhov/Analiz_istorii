@@ -136,11 +136,86 @@ DEFAULT_KSG_PROFILE: dict[str, Any] = {
     "aliases": _default_ksg_aliases(),
 }
 
+
+def _default_ops_aliases() -> dict[str, list[str]]:
+    required = (
+        "Дата начала операции",
+        "№ истории",
+        "Услуга",
+        "Опер.стол",
+    )
+    optional = (
+        "Время начала операции",
+        "Дата окончания операции",
+        "Время окончания операции",
+        "Фамилия, имя, отчество пациента",
+        "Операционная бригада",
+        "Отделение госпитализации",
+    )
+    aliases = _self_aliases(*required, *optional)
+    aliases["№ истории"] = ["№ истории", "Номер истории", "КВС", "№ КВС", "Номер КВС"]
+    aliases["Опер.стол"] = ["Опер.стол", "Опер стол", "Операционный стол", "Стол"]
+    aliases["Услуга"] = ["Услуга", "Операция", "Код услуги", "Название операции"]
+    aliases["Фамилия, имя, отчество пациента"] = [
+        "Фамилия, имя, отчество пациента",
+        "Пациент",
+        "ФИО пациента",
+        "Фамилия имя отчество пациента",
+    ]
+    aliases["Операционная бригада"] = [
+        "Операционная бригада",
+        "Бригада",
+        "Хирургическая бригада",
+    ]
+    aliases["Отделение госпитализации"] = [
+        "Отделение госпитализации",
+        "Отделение",
+        "Подразделение",
+        "Отд.",
+    ]
+    aliases["Дата начала операции"] = [
+        "Дата начала операции",
+        "Дата операции",
+        "Дата начала",
+    ]
+    aliases["Время начала операции"] = [
+        "Время начала операции",
+        "Время начала",
+        "Время операции",
+    ]
+    aliases["Дата окончания операции"] = [
+        "Дата окончания операции",
+        "Дата окончания",
+        "Дата конца",
+    ]
+    aliases["Время окончания операции"] = [
+        "Время окончания операции",
+        "Время окончания",
+        "Время конца",
+    ]
+    return aliases
+
+
+DEFAULT_OPS_PROFILE: dict[str, Any] = {
+    "id": "default",
+    "name": "Операции стандарт",
+    "header_fragments": ["№ истории", "Опер.стол", "Услуга"],
+    "required_columns": [
+        "Дата начала операции",
+        "№ истории",
+        "Услуга",
+        "Опер.стол",
+    ],
+    "aliases": _default_ops_aliases(),
+}
+
 DEFAULT_REPORT_PROFILES: dict[str, Any] = {
     "emk_active": "default",
     "ksg_active": "default",
+    "ops_active": "default",
     "emk": {"default": deepcopy(DEFAULT_EMK_PROFILE)},
     "ksg": {"default": deepcopy(DEFAULT_KSG_PROFILE)},
+    "ops": {"default": deepcopy(DEFAULT_OPS_PROFILE)},
 }
 
 
@@ -174,13 +249,15 @@ def normalize_report_profiles(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return result
 
-    for kind in ("emk", "ksg"):
-        default_prof = (
-            deepcopy(DEFAULT_EMK_PROFILE) if kind == "emk" else deepcopy(DEFAULT_KSG_PROFILE)
-        )
+    kind_defaults = {
+        "emk": DEFAULT_EMK_PROFILE,
+        "ksg": DEFAULT_KSG_PROFILE,
+        "ops": DEFAULT_OPS_PROFILE,
+    }
+    for kind, default_prof_src in kind_defaults.items():
+        default_prof = deepcopy(default_prof_src)
         user_kind = raw.get(kind) if isinstance(raw.get(kind), dict) else {}
         merged_kind: dict[str, Any] = {}
-        # always keep default
         merged_kind["default"] = _merge_profile(default_prof, user_kind.get("default"))
         for pid, prof in user_kind.items():
             if pid == "default" or not isinstance(prof, dict):
@@ -191,22 +268,23 @@ def normalize_report_profiles(raw: Any) -> dict[str, Any]:
             merged_kind[str(pid)]["id"] = str(pid)
         result[kind] = merged_kind
 
-    emk_active = str(raw.get("emk_active") or "default")
-    ksg_active = str(raw.get("ksg_active") or "default")
-    if emk_active not in result["emk"]:
-        emk_active = "default"
-    if ksg_active not in result["ksg"]:
-        ksg_active = "default"
-    result["emk_active"] = emk_active
-    result["ksg_active"] = ksg_active
+    for active_key, bucket in (
+        ("emk_active", "emk"),
+        ("ksg_active", "ksg"),
+        ("ops_active", "ops"),
+    ):
+        active = str(raw.get(active_key) or "default")
+        if active not in result[bucket]:
+            active = "default"
+        result[active_key] = active
     return result
 
 
 def get_active_profile(cfg: dict[str, Any], kind: str) -> dict[str, Any]:
-    """kind: 'emk' | 'ksg'."""
+    """kind: 'emk' | 'ksg' | 'ops'."""
     profiles = normalize_report_profiles(cfg.get("report_profiles"))
-    active_key = "emk_active" if kind == "emk" else "ksg_active"
-    bucket = "emk" if kind == "emk" else "ksg"
+    active_key = {"emk": "emk_active", "ksg": "ksg_active", "ops": "ops_active"}[kind]
+    bucket = kind
     pid = profiles.get(active_key) or "default"
     prof = profiles.get(bucket, {}).get(pid) or profiles[bucket]["default"]
     return deepcopy(prof)

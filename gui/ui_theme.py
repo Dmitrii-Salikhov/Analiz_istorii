@@ -105,18 +105,18 @@ VIOLATION_TREE_TAGS_DARK: dict[str, str] = {
 VIOLATION_TREE_TAGS = VIOLATION_TREE_TAGS_LIGHT
 
 _MONTH_RU = {
-    1: "янв",
-    2: "фев",
-    3: "мар",
-    4: "апр",
+    1: "январь",
+    2: "февраль",
+    3: "март",
+    4: "апрель",
     5: "май",
-    6: "июн",
-    7: "июл",
-    8: "авг",
-    9: "сен",
-    10: "окт",
-    11: "ноя",
-    12: "дек",
+    6: "июнь",
+    7: "июль",
+    8: "август",
+    9: "сентябрь",
+    10: "октябрь",
+    11: "ноябрь",
+    12: "декабрь",
 }
 
 _SLICE_REGISTERED = False
@@ -272,7 +272,7 @@ def style_matplotlib_axes(fig, ax, theme: str | None = None) -> None:
 
 
 def short_month_label(name: str, df: pd.DataFrame | None = None) -> str:
-    """Короткий ярлык месяца для сравнения: «май 2026» (по графе «Выписка»)."""
+    """Ярлык месяца для сравнения: «июнь 2026» (по графе «Выписка»)."""
     if df is not None and not df.empty:
         date_col = "Выписка" if "Выписка" in df.columns else (
             "Поступление" if "Поступление" in df.columns else None

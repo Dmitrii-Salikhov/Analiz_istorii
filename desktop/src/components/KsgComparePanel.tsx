@@ -198,7 +198,11 @@ export function KsgComparePanel({
       <h3 style={{ marginTop: 16 }}>Графики</h3>
       <div className="compare-chart-toggles">
         {CHARTS.map((c) => (
-          <label key={c.id} className="compare-chart-toggle">
+          <label
+            key={c.id}
+            className="compare-chart-toggle"
+            title={chartsOn[c.id] ? `Скрыть график «${c.label}»` : `Показать график «${c.label}»`}
+          >
             <input
               type="checkbox"
               checked={chartsOn[c.id]}

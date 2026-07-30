@@ -48,7 +48,7 @@ export function SearchableMultiSelect({
           {value.map((code) => {
             const meta = items.find((i) => i.code === code);
             return (
-              <button key={code} type="button" className="sms-chip" onClick={() => toggle(code)}>
+              <button key={code} type="button" className="sms-chip" title="Убрать из выбранных" onClick={() => toggle(code)}>
                 {meta ? `${code} · ${meta.name}` : code} ×
               </button>
             );

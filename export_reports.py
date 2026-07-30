@@ -267,3 +267,91 @@ def export_ksg_excel(
         r["avg_kz_doctor"].to_excel(writer, sheet_name="Средний КЗ", index=False)
         auto_adjust_excel_columns(writer, "Средний КЗ", r["avg_kz_doctor"])
     return str(out.resolve())
+
+
+OPS_SECTIONS = (
+    "Сводка",
+    "Длительные",
+    "Без_стола",
+)
+
+
+def export_ops_txt(
+    path: str | Path,
+    result: Any,
+    *,
+    file_name: str,
+) -> str:
+    out = Path(path)
+    with out.open("w", encoding="utf-8") as f:
+        f.write(f"Отчёт сформирован: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n")
+        f.write(f"Исходный файл: {file_name}\n")
+        if getattr(result, "department", None):
+            f.write(f"Отделение: {result.department}\n")
+        f.write(f"Порог длительной операции: > {result.long_op_hours:g} ч\n\n")
+        f.write(f"Всего операций: {result.total_ops}\n")
+        f.write(f"Длительных: {result.long_count}\n")
+        f.write(f"Без опер.стола: {result.missing_table_count}\n\n")
+        f.write("ДЛИТЕЛЬНЫЕ ОПЕРАЦИИ\n")
+        for row in result.long_ops:
+            f.write(
+                f"{row.get('КВС')} | {row.get('Пациент')} | {row.get('Хирург')} | "
+                f"{row.get('Услуга')} | {row.get('Длительность')} | {row.get('Причина')}\n"
+            )
+        f.write("\nБЕЗ ОПЕР.СТОЛА\n")
+        for row in result.missing_table:
+            f.write(
+                f"{row.get('КВС')} | {row.get('Пациент')} | {row.get('Хирург')} | "
+                f"{row.get('Услуга')} | {row.get('Причина')}\n"
+            )
+    return str(out.resolve())
+
+
+def export_ops_excel(
+    path: str | Path,
+    result: Any,
+    *,
+    file_name: str,
+) -> str:
+    out = Path(path)
+    long_df = pd.DataFrame(result.long_ops)
+    miss_df = pd.DataFrame(result.missing_table)
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        meta = pd.DataFrame(
+            {
+                "Параметр": [
+                    "Дата",
+                    "Файл",
+                    "Отделение",
+                    "Порог длительности, ч",
+                    "Всего операций",
+                    "Длительных",
+                    "Без опер.стола",
+                ],
+                "Значение": [
+                    datetime.now().strftime("%d.%m.%Y %H:%M"),
+                    file_name,
+                    getattr(result, "department", "") or "",
+                    result.long_op_hours,
+                    result.total_ops,
+                    result.long_count,
+                    result.missing_table_count,
+                ],
+            }
+        )
+        meta.to_excel(writer, sheet_name="Сводка", index=False)
+        auto_adjust_excel_columns(writer, "Сводка", meta)
+        cols = ["КВС", "Пациент", "Хирург", "Услуга", "Длительность", "Причина", "Опер.стол", "Отделение"]
+        if long_df.empty:
+            long_df = pd.DataFrame(columns=cols)
+        else:
+            long_df = long_df.reindex(columns=[c for c in cols if c in long_df.columns])
+        long_df.to_excel(writer, sheet_name="Длительные", index=False)
+        auto_adjust_excel_columns(writer, "Длительные", long_df)
+        if miss_df.empty:
+            miss_df = pd.DataFrame(columns=cols)
+        else:
+            miss_df = miss_df.reindex(columns=[c for c in cols if c in miss_df.columns])
+        miss_df.to_excel(writer, sheet_name="Без_стола", index=False)
+        auto_adjust_excel_columns(writer, "Без_стола", miss_df)
+    return str(out.resolve())

@@ -19,7 +19,7 @@ export function ExportDialog({
   onClose,
   onExport,
 }: {
-  kind: 'emk' | 'ksg';
+  kind: 'emk' | 'ksg' | 'ops';
   defaultName: string;
   sections?: string[];
   onClose: () => void;
@@ -36,10 +36,11 @@ export function ExportDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const title = useMemo(
-    () => (kind === 'emk' ? 'Экспорт отчёта ЭМК' : 'Экспорт отчёта КСГ'),
-    [kind],
-  );
+  const title = useMemo(() => {
+    if (kind === 'emk') return 'Экспорт отчёта ЭМК';
+    if (kind === 'ops') return 'Экспорт проверок операций';
+    return 'Экспорт отчёта КСГ';
+  }, [kind]);
 
   return (
     <Modal title={title} hint={`Имя по умолчанию: ${defaultName}`} onClose={onClose}>
@@ -68,13 +69,14 @@ export function ExportDialog({
         {error && <div className="error-banner">{error}</div>}
       </div>
       <div className="modal__actions">
-        <button className="btn" type="button" onClick={onClose}>
+        <button className="btn" type="button" title="Закрыть без сохранения" onClick={onClose}>
           Отмена
         </button>
         <button
           className="btn btn-primary"
           type="button"
           disabled={busy}
+          title="Выбрать путь и сохранить файл отчёта"
           onClick={async () => {
             setBusy(true);
             setError(null);

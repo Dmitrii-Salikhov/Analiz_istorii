@@ -285,6 +285,20 @@
   margin-bottom: 12px;
 }
 
+/* В тёмной теме кнопки подвкладок — светлый фон и чёрный текст (читаемость). */
+[data-theme='dark'] .subtabs .chip {
+  color: #111;
+  background: #e8eaed;
+  border-color: #c5cad3;
+}
+
+[data-theme='dark'] .subtabs .chip.active {
+  color: #111;
+  background: #b8d4f0;
+  border-color: #3d9cf0;
+  font-weight: 650;
+}
+
 .chip {
   border: 1px solid var(--border);
   background: var(--bg-panel);
@@ -351,6 +365,16 @@ table.data tr:hover td {
 .error-banner {
   background: color-mix(in srgb, var(--danger) 18%, var(--bg-elevated));
   border: 1px solid color-mix(in srgb, var(--danger) 50%, var(--border));
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  white-space: pre-wrap;
+}
+
+.info-banner {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
   color: var(--text);
   padding: 8px 12px;
   border-radius: var(--radius);

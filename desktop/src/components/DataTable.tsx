@@ -70,7 +70,12 @@ export function DataTable({
             </span>
           )}
           {copyable && (
-            <button className="btn" type="button" onClick={() => void onCopy()}>
+            <button
+              className="btn"
+              type="button"
+              title="Скопировать видимые строки таблицы в буфер обмена"
+              onClick={() => void onCopy()}
+            >
               {copied ? 'Скопировано' : 'Копировать'}
             </button>
           )}

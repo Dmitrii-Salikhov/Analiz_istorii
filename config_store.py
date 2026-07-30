@@ -21,6 +21,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "kslp_age_max": 4,
     "kslp_senior_age": 75,
     "long_stay_days": 7,
+    "long_op_hours": 4,
     "kslp_operations_codes": [
         "A16.08.017.001",
         "A16.08.013.001",
@@ -71,6 +72,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "main_tab": "emk",
         "emk_sub": "share",
         "ksg_sub": "doctors",
+        "ops_sub": "long",
         "compare_charts": {
             "patients": True,
             "sum": True,
@@ -81,6 +83,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "report_profiles": None,  # filled below via normalize — placeholder replaced
     "recent_emk": [],
     "recent_ksg": [],
+    "recent_ops": [],
     "last_main_tab": 0,
     "last_seen_version": None,
     "pending_update_from": None,
@@ -111,10 +114,12 @@ def load_config() -> dict[str, Any]:
             pass
     cfg.setdefault("recent_emk", [])
     cfg.setdefault("recent_ksg", [])
+    cfg.setdefault("recent_ops", [])
     cfg.setdefault("last_main_tab", 0)
     cfg.setdefault("last_seen_version", None)
     cfg.setdefault("pending_update_from", None)
     cfg.setdefault("long_stay_days", 7)
+    cfg.setdefault("long_op_hours", 4)
     cfg.setdefault("known_departments", list(DEFAULT_CONFIG["known_departments"]))
     cfg.setdefault("emk_display", deepcopy(DEFAULT_CONFIG["emk_display"]))
     cfg.setdefault("ksg_display", deepcopy(DEFAULT_CONFIG["ksg_display"]))
@@ -199,7 +204,7 @@ def save_config(config: dict[str, Any]) -> None:
 
 def push_recent_file(config: dict[str, Any], key: str, file_path: str, limit: int = RECENT_MAX) -> None:
     """Добавляет путь в начало списка недавних файлов."""
-    if key not in ("recent_emk", "recent_ksg"):
+    if key not in ("recent_emk", "recent_ksg", "recent_ops"):
         return
     path = str(file_path)
     items = [p for p in list(config.get(key) or []) if p and p != path]

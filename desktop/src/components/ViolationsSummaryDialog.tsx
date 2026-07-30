@@ -52,6 +52,7 @@ export function ViolationsSummaryDialog({
             <button
               className="btn btn-primary"
               type="button"
+              title="Скопировать все категории нарушений"
               onClick={() =>
                 void copy(
                   sections.map((s) => s.text).join('\n\n'),
@@ -64,6 +65,7 @@ export function ViolationsSummaryDialog({
             <button
               className="btn"
               type="button"
+              title="Скопировать только отмеченные категории"
               onClick={() => {
                 const blocks = sections.filter((s) => selected[s.id]).map((s) => s.text);
                 if (!blocks.length) {

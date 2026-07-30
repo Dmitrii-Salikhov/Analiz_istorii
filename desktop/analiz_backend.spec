@@ -25,6 +25,7 @@ hiddenimports = [
     "export_reports",
     "lor_analysis",
     "ksg_analysis",
+    "ops_analysis",
     "paths",
     "updater",
     "changelog",

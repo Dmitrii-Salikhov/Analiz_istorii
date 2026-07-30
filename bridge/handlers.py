@@ -11,7 +11,13 @@ from typing import Any
 import pandas as pd
 
 from config_store import load_config, push_recent_file, save_config
-from excel_io import list_departments, load_ksg_excel, load_lor_excel, pick_default_department
+from excel_io import (
+    list_departments,
+    load_ksg_excel,
+    load_lor_excel,
+    load_ops_excel,
+    pick_default_department,
+)
 from report_profiles import get_active_profile
 from export_reports import (
     EMK_SECTIONS,
@@ -19,6 +25,8 @@ from export_reports import (
     export_emk_txt,
     export_ksg_excel,
     export_ksg_txt,
+    export_ops_excel,
+    export_ops_txt,
 )
 from gui.ui_theme import short_month_label
 from ksg_analysis import (
@@ -34,6 +42,7 @@ from lor_analysis import (
     format_violations_summary_sections,
     violation_share_table,
 )
+from ops_analysis import analyze_ops, list_ops_departments
 from updater import read_current_version
 
 # In-memory sessions
@@ -50,6 +59,14 @@ _KSG: dict[str, Any] = {
     "active": 0,
     "reference": None,
     "reference_status": "",
+}
+_OPS: dict[str, Any] = {
+    "path": None,
+    "file_name": None,
+    "df": None,
+    "analysis": None,
+    "departments": [],
+    "department": "",
 }
 
 
@@ -206,6 +223,7 @@ _CONFIG_SET_ALLOWED = frozenset(
         "kslp_age_max",
         "kslp_senior_age",
         "long_stay_days",
+        "long_op_hours",
         "kslp_operations_codes",
         "kslp_rules",
         "preferred_department",
@@ -513,7 +531,7 @@ def ref_operations(_params: dict[str, Any]) -> dict[str, Any]:
 def ref_departments(_params: dict[str, Any]) -> dict[str, Any]:
     cfg = load_config()
     known = list(cfg.get("known_departments") or [])
-    session = list(_EMK.get("departments") or [])
+    session = list(_EMK.get("departments") or []) + list(_OPS.get("departments") or [])
     merged: list[str] = []
     for d in session + known:
         if d and d not in merged:
@@ -522,6 +540,94 @@ def ref_departments(_params: dict[str, Any]) -> dict[str, Any]:
     if preferred and preferred not in merged:
         merged.insert(0, preferred)
     return {"departments": merged, "preferred": preferred}
+
+
+def _ops_payload(result) -> dict[str, Any]:
+    return {
+        "file_name": result.file_name or _OPS.get("file_name"),
+        "path": _OPS.get("path"),
+        "department": result.department or _OPS.get("department") or "",
+        "departments": list(_OPS.get("departments") or []),
+        "total_ops": result.total_ops,
+        "long_op_hours": result.long_op_hours,
+        "long_count": result.long_count,
+        "missing_table_count": result.missing_table_count,
+        "long_ops": _json_safe(result.long_ops),
+        "missing_table": _json_safe(result.missing_table),
+    }
+
+
+def ops_load(params: dict[str, Any]) -> dict[str, Any]:
+    path = _assert_excel_path(params.get("path"))
+    cfg = load_config()
+    profile = get_active_profile(cfg, "ops")
+    loaded = load_ops_excel(str(path), profile=profile, config=cfg)
+    df = loaded.dataframe
+    departments = list_ops_departments(df)
+    preferred = pick_default_department(departments, cfg.get("preferred_department")) or ""
+    if not preferred and departments:
+        preferred = departments[0]
+    # merge into known departments for settings
+    known = list(cfg.get("known_departments") or [])
+    for d in departments:
+        if d and d not in known:
+            known.append(d)
+    cfg["known_departments"] = known
+    result = analyze_ops(df, cfg, file_name=path.name, department=preferred or None)
+    _OPS["path"] = str(path)
+    _OPS["file_name"] = path.name
+    _OPS["df"] = df
+    _OPS["departments"] = departments
+    _OPS["department"] = preferred
+    _OPS["analysis"] = result
+    push_recent_file(cfg, "recent_ops", str(path))
+    save_config(cfg)
+    payload = _ops_payload(result)
+    payload.update(
+        {
+            "profile_id": profile.get("id"),
+            "profile_name": profile.get("name"),
+            "mapping": loaded.mapping.to_dict() if loaded.mapping else None,
+            "rows": int(len(df)),
+            "sheet_name": loaded.sheet_name,
+            "preferred_department": preferred,
+            "known_departments": known,
+        }
+    )
+    return payload
+
+
+def ops_analyze(params: dict[str, Any]) -> dict[str, Any]:
+    if _OPS.get("df") is None:
+        raise RuntimeError("Сначала загрузите файл операций")
+    cfg = load_config()
+    dept = str(params.get("department") or "").strip()
+    if not dept:
+        dept = str(_OPS.get("department") or "").strip()
+    if dept:
+        _OPS["department"] = dept
+    result = analyze_ops(
+        _OPS["df"],
+        cfg,
+        file_name=str(_OPS.get("file_name") or ""),
+        department=dept or None,
+    )
+    _OPS["analysis"] = result
+    return _ops_payload(result)
+
+
+def ops_export(params: dict[str, Any]) -> dict[str, Any]:
+    result = _OPS.get("analysis")
+    if result is None:
+        raise RuntimeError("Сначала загрузите и проанализируйте файл операций")
+    fmt = str(params.get("format") or "xlsx").lower()
+    path = _assert_export_path(params.get("path"))
+    file_name = str(_OPS.get("file_name") or "")
+    if fmt in ("txt", "text"):
+        saved = export_ops_txt(path, result, file_name=file_name)
+    else:
+        saved = export_ops_excel(path, result, file_name=file_name)
+    return {"path": saved, "format": "txt" if fmt in ("txt", "text") else "xlsx"}
 
 
 HANDLERS = {
@@ -543,6 +649,9 @@ HANDLERS = {
     "ksg.reanalyze": ksg_reanalyze,
     "ksg.compare": ksg_compare,
     "ksg.export": ksg_export,
+    "ops.load": ops_load,
+    "ops.analyze": ops_analyze,
+    "ops.export": ops_export,
 }
 
 

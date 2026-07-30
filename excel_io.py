@@ -10,6 +10,7 @@ import pandas as pd
 from report_profiles import (
     DEFAULT_EMK_PROFILE,
     DEFAULT_KSG_PROFILE,
+    DEFAULT_OPS_PROFILE,
     EMK_REQUIRED_COLUMNS,
     KSG_REQUIRED_COLUMNS,
     get_active_profile,
@@ -261,8 +262,7 @@ def load_excel_with_header(
         keys = ", ".join(f"«{k}»" for k in required_fragments)
         raise HeaderNotFoundError(
             f"Не найдена строка заголовков ни на одном листе.\n"
-            f"Ожидались ключевые слова: {keys}\n"
-            f"Проверьте профиль формата отчёта в настройках."
+            f"Ожидались ключевые слова: {keys}."
         )
 
     report(f"Чтение листа «{sheet_used}»…", 0.7)
@@ -304,11 +304,131 @@ def load_excel_with_header(
     )
 
 
+def deepcopy_profile(p: Mapping[str, Any]) -> dict[str, Any]:
+    from copy import deepcopy
+
+    return deepcopy(dict(p))
+
+
 # Back-compat exports
 LOR_HEADER_FRAGMENTS = tuple(DEFAULT_EMK_PROFILE["header_fragments"])
 LOR_REQUIRED_COLUMNS = EMK_REQUIRED_COLUMNS
 KSG_HEADER_FRAGMENTS = tuple(DEFAULT_KSG_PROFILE["header_fragments"])
 # KSG_REQUIRED_COLUMNS imported from report_profiles
+
+REPORT_KIND_LABELS: dict[str, str] = {
+    "emk": "отчёт по заполнению ЭМК (вкладка «Анализ ЭМК»)",
+    "ksg": "отчёт по КСГ (вкладка «Анализ КСГ»)",
+    "ops": "отчёт по операциям (вкладка «Операции»)",
+}
+
+_REPORT_KIND_FRAGMENTS: dict[str, tuple[str, ...]] = {
+    "emk": tuple(DEFAULT_EMK_PROFILE["header_fragments"]),
+    "ksg": tuple(DEFAULT_KSG_PROFILE["header_fragments"]),
+    "ops": tuple(DEFAULT_OPS_PROFILE["header_fragments"]),
+}
+
+
+def workbook_has_header_fragments(
+    file_path: str,
+    fragments: Sequence[str],
+    *,
+    max_scan_rows: int = 80,
+) -> bool:
+    """True, если на каком-либо листе есть строка со всеми ключевыми словами."""
+    if not fragments:
+        return False
+    try:
+        xls = pd.ExcelFile(file_path)
+    except Exception:
+        return False
+    for sheet in xls.sheet_names:
+        try:
+            raw_df = pd.read_excel(file_path, sheet_name=sheet, header=None, dtype=str)
+        except Exception:
+            continue
+        if find_header_row(raw_df, fragments, max_scan_rows=max_scan_rows) is not None:
+            return True
+    return False
+
+
+def detect_report_kinds(file_path: str) -> list[str]:
+    """Какие стандартные типы отчётов узнаются по заголовкам файла."""
+    found: list[str] = []
+    for kind, frags in _REPORT_KIND_FRAGMENTS.items():
+        if workbook_has_header_fragments(file_path, frags):
+            found.append(kind)
+    return found
+
+
+def format_wrong_report_hint(expected_kind: str, file_path: str) -> str:
+    """Подсказка: загружен другой тип отчёта / неизвестный формат."""
+    expected = REPORT_KIND_LABELS.get(expected_kind, "ожидаемый тип отчёта")
+    others = [k for k in detect_report_kinds(file_path) if k != expected_kind]
+    if others:
+        looks_like = "; ".join(REPORT_KIND_LABELS[k] for k in others if k in REPORT_KIND_LABELS)
+        return (
+            f"\n\nПохоже, загружен не тот отчёт.\n"
+            f"Сейчас ожидается: {expected}.\n"
+            f"Этот файл больше похож на: {looks_like}."
+        )
+    return (
+        f"\n\nВозможно, загружен не тот тип отчёта.\n"
+        f"Сейчас ожидается: {expected}.\n"
+        f"Проверьте файл или профиль формата в настройках."
+    )
+
+
+def _enrich_parse_error(
+    exc: ExcelParseError,
+    *,
+    expected_kind: str,
+    file_path: str,
+) -> ExcelParseError:
+    hint = format_wrong_report_hint(expected_kind, file_path)
+    msg = f"{exc}{hint}"
+    if isinstance(exc, MissingColumnsError):
+        neo = MissingColumnsError(exc.missing, found=exc.found, unmatched=exc.unmatched)
+        neo.args = (msg,)
+        return neo
+    return type(exc)(msg)
+
+
+def _load_typed_excel(
+    file_path: str,
+    *,
+    expected_kind: str,
+    progress=None,
+    profile: Mapping[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
+    default_profile: Mapping[str, Any],
+    kind_key: str,
+    after_load: Callable[[ExcelLoadResult], ExcelLoadResult] | None = None,
+) -> ExcelLoadResult:
+    prof = dict(profile) if profile else (
+        get_active_profile(dict(config or {}), kind_key)
+        if config is not None
+        else deepcopy_profile(default_profile)
+    )
+    try:
+        result = load_excel_with_header(
+            file_path,
+            required_fragments=list(
+                prof.get("header_fragments") or default_profile["header_fragments"]
+            ),
+            required_columns=list(
+                prof.get("required_columns") or default_profile["required_columns"]
+            ),
+            aliases=prof.get("aliases") or {},
+            profile_id=str(prof.get("id") or "default"),
+            profile_name=str(prof.get("name") or ""),
+            progress=progress,
+        )
+        if after_load is not None:
+            result = after_load(result)
+        return result
+    except (HeaderNotFoundError, MissingColumnsError) as e:
+        raise _enrich_parse_error(e, expected_kind=expected_kind, file_path=file_path) from e
 
 
 def load_lor_excel(
@@ -317,24 +437,15 @@ def load_lor_excel(
     profile: Mapping[str, Any] | None = None,
     config: Mapping[str, Any] | None = None,
 ) -> ExcelLoadResult:
-    prof = dict(profile) if profile else (
-        get_active_profile(dict(config or {}), "emk") if config is not None else deepcopy_profile(DEFAULT_EMK_PROFILE)
-    )
-    return load_excel_with_header(
+    return _load_typed_excel(
         file_path,
-        required_fragments=list(prof.get("header_fragments") or LOR_HEADER_FRAGMENTS),
-        required_columns=list(prof.get("required_columns") or LOR_REQUIRED_COLUMNS),
-        aliases=prof.get("aliases") or {},
-        profile_id=str(prof.get("id") or "default"),
-        profile_name=str(prof.get("name") or ""),
+        expected_kind="emk",
         progress=progress,
+        profile=profile,
+        config=config,
+        default_profile=DEFAULT_EMK_PROFILE,
+        kind_key="emk",
     )
-
-
-def deepcopy_profile(p: Mapping[str, Any]) -> dict[str, Any]:
-    from copy import deepcopy
-
-    return deepcopy(dict(p))
 
 
 def load_ksg_excel(
@@ -343,28 +454,43 @@ def load_ksg_excel(
     profile: Mapping[str, Any] | None = None,
     config: Mapping[str, Any] | None = None,
 ) -> ExcelLoadResult:
-    prof = dict(profile) if profile else (
-        get_active_profile(dict(config or {}), "ksg")
-        if config is not None
-        else deepcopy_profile(DEFAULT_KSG_PROFILE)
-    )
-    result = load_excel_with_header(
+    def _require_dates(result: ExcelLoadResult) -> ExcelLoadResult:
+        df = result.dataframe
+        if "Поступление" not in df.columns and "Выписка" not in df.columns:
+            raise MissingColumnsError(
+                ["Поступление или Выписка"],
+                found=list(df.columns),
+                unmatched=(result.mapping.unused_headers if result.mapping else []),
+            )
+        return result
+
+    return _load_typed_excel(
         file_path,
-        required_fragments=list(prof.get("header_fragments") or KSG_HEADER_FRAGMENTS),
-        required_columns=list(prof.get("required_columns") or KSG_REQUIRED_COLUMNS),
-        aliases=prof.get("aliases") or {},
-        profile_id=str(prof.get("id") or "default"),
-        profile_name=str(prof.get("name") or ""),
+        expected_kind="ksg",
         progress=progress,
+        profile=profile,
+        config=config,
+        default_profile=DEFAULT_KSG_PROFILE,
+        kind_key="ksg",
+        after_load=_require_dates,
     )
-    df = result.dataframe
-    if "Поступление" not in df.columns and "Выписка" not in df.columns:
-        raise MissingColumnsError(
-            ["Поступление или Выписка"],
-            found=list(df.columns),
-            unmatched=(result.mapping.unused_headers if result.mapping else []),
-        )
-    return result
+
+
+def load_ops_excel(
+    file_path: str,
+    progress=None,
+    profile: Mapping[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
+) -> ExcelLoadResult:
+    return _load_typed_excel(
+        file_path,
+        expected_kind="ops",
+        progress=progress,
+        profile=profile,
+        config=config,
+        default_profile=DEFAULT_OPS_PROFILE,
+        kind_key="ops",
+    )
 
 
 def list_departments(df: pd.DataFrame, column: str = "Отделение") -> list[str]:

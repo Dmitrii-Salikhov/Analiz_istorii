@@ -18,7 +18,30 @@ import { copyText } from './lib/clipboard';
 import './App.css';
 
 type Theme = 'dark' | 'light';
-type MainTab = 'emk' | 'ksg';
+type MainTab = 'emk' | 'ksg' | 'ops';
+
+type OpsIssueRow = {
+  КВС?: string;
+  Пациент?: string;
+  Хирург?: string;
+  Услуга?: string;
+  Длительность?: string;
+  Причина?: string;
+  'Опер.стол'?: string;
+  Отделение?: string;
+};
+
+type OpsAnalysis = {
+  file_name?: string;
+  department?: string;
+  departments?: string[];
+  total_ops: number;
+  long_op_hours: number;
+  long_count: number;
+  missing_table_count: number;
+  long_ops: OpsIssueRow[];
+  missing_table: OpsIssueRow[];
+};
 
 type EmkAnalysis = {
   department: string;
@@ -131,11 +154,14 @@ type ColumnMapping = {
   unused_headers?: string[];
 };
 
-function activeProfileLabel(cfg: AppConfig, kind: 'emk' | 'ksg'): string {
+function activeProfileLabel(cfg: AppConfig, kind: 'emk' | 'ksg' | 'ops'): string {
   const rp = cfg.report_profiles;
-  if (!rp) return kind === 'emk' ? 'ЭМК стандарт' : 'КСГ стандарт';
-  const activeId = (kind === 'emk' ? rp.emk_active : rp.ksg_active) || 'default';
-  const bucket = kind === 'emk' ? rp.emk : rp.ksg;
+  const fallback =
+    kind === 'emk' ? 'ЭМК стандарт' : kind === 'ksg' ? 'КСГ стандарт' : 'Операции стандарт';
+  if (!rp) return fallback;
+  const activeId =
+    (kind === 'emk' ? rp.emk_active : kind === 'ksg' ? rp.ksg_active : rp.ops_active) || 'default';
+  const bucket = kind === 'emk' ? rp.emk : kind === 'ksg' ? rp.ksg : rp.ops;
   const name = bucket?.[activeId]?.name;
   return name || activeId;
 }
@@ -175,6 +201,11 @@ export default function App() {
   const [ksg, setKsg] = useState<KsgAnalysis | null>(null);
   const [ksgRef, setKsgRef] = useState('');
   const [ksgSub, setKsgSub] = useState<'doctors' | 'cases' | 'ops' | 'compare'>('doctors');
+  const [opsFile, setOpsFile] = useState<string | null>(null);
+  const [ops, setOps] = useState<OpsAnalysis | null>(null);
+  const [opsDepartments, setOpsDepartments] = useState<string[]>([]);
+  const [opsDepartment, setOpsDepartment] = useState('');
+  const [opsSub, setOpsSub] = useState<'long' | 'table'>('long');
   const [compare, setCompare] = useState<CompareResult | null>(null);
   const [compareIndices, setCompareIndices] = useState<number[]>([]);
   const [compareCharts, setCompareCharts] = useState<CompareChartsState>(DEFAULT_COMPARE_CHARTS);
@@ -200,11 +231,12 @@ export default function App() {
         try {
           const res = await rpc<{ config: AppConfig }>('config.set', {
             config: {
-              last_main_tab: tab === 'ksg' ? 1 : 0,
+              last_main_tab: tab === 'ksg' ? 1 : tab === 'ops' ? 2 : 0,
               ui_prefs: {
                 main_tab: tab,
                 emk_sub: emkSub,
                 ksg_sub: ksgSub,
+                ops_sub: opsSub,
                 compare_charts: compareCharts,
               },
             },
@@ -218,7 +250,7 @@ export default function App() {
     return () => {
       if (persistTimer.current) window.clearTimeout(persistTimer.current);
     };
-  }, [tab, emkSub, ksgSub, compareCharts]);
+  }, [tab, emkSub, ksgSub, opsSub, compareCharts]);
 
   useEffect(() => {
     let cancelled = false;
@@ -237,10 +269,12 @@ export default function App() {
         if (t === 'slice-light' || t === 'light') setTheme('light');
         else setTheme('dark');
         const prefs = cfgRes.config?.ui_prefs;
-        if (prefs?.main_tab === 'ksg' || prefs?.main_tab === 'emk') {
+        if (prefs?.main_tab === 'ksg' || prefs?.main_tab === 'emk' || prefs?.main_tab === 'ops') {
           setTab(prefs.main_tab);
         } else if (cfgRes.config?.last_main_tab === 1) {
           setTab('ksg');
+        } else if (cfgRes.config?.last_main_tab === 2) {
+          setTab('ops');
         }
         const emkSubs = ['share', 'violations', 'doctors', 'skp', 'age'] as const;
         if (prefs?.emk_sub && (emkSubs as readonly string[]).includes(prefs.emk_sub)) {
@@ -249,6 +283,10 @@ export default function App() {
         const ksgSubs = ['doctors', 'cases', 'ops', 'compare'] as const;
         if (prefs?.ksg_sub && (ksgSubs as readonly string[]).includes(prefs.ksg_sub)) {
           setKsgSub(prefs.ksg_sub as typeof ksgSubs[number]);
+        }
+        const opsSubs = ['long', 'table'] as const;
+        if (prefs?.ops_sub && (opsSubs as readonly string[]).includes(prefs.ops_sub)) {
+          setOpsSub(prefs.ops_sub as typeof opsSubs[number]);
         }
         if (prefs?.compare_charts) {
           setCompareCharts({ ...DEFAULT_COMPARE_CHARTS, ...prefs.compare_charts });
@@ -407,6 +445,67 @@ export default function App() {
     await loadKsgFromPaths(list);
   }, [loadKsgFromPaths]);
 
+  const loadOpsFromPath = useCallback(async (path: string) => {
+    setError(null);
+    setBusy(true);
+    try {
+      setStatus('Загрузка операций…');
+      const loaded = await rpc<
+        OpsAnalysis & {
+          profile_id?: string;
+          profile_name?: string;
+          mapping?: ColumnMapping;
+          preferred_department?: string;
+          known_departments?: string[];
+        }
+      >('ops.load', { path });
+      setOpsFile(loaded.file_name || path.split(/[/\\]/).pop() || path);
+      const deps = loaded.departments || [];
+      setOpsDepartments(deps);
+      const dept = loaded.preferred_department || loaded.department || deps[0] || '';
+      setOpsDepartment(dept);
+      if (loaded.known_departments?.length) setDeptOptions(loaded.known_departments);
+      setOps(loaded);
+      setTab('ops');
+      const mapHint = mappingStatusSuffix(loaded.profile_name, loaded.mapping);
+      setLoadMappingHint(mapHint);
+      setStatus(`Операции: ${loaded.file_name || 'файл'} · ${mapHint}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setStatus('Ошибка загрузки операций');
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const loadOps = useCallback(async () => {
+    const path = await api().openExcelDialog({ title: 'Отчёт по операциям' });
+    if (!path || Array.isArray(path)) return;
+    await loadOpsFromPath(path);
+  }, [loadOpsFromPath]);
+
+  const reanalyzeOps = useCallback(async (dept?: string) => {
+    if (!opsFile) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus('Пересчёт операций…');
+      const nextDept = dept ?? opsDepartment;
+      if (dept !== undefined) setOpsDepartment(dept);
+      const analysis = await rpc<OpsAnalysis>('ops.analyze', {
+        department: nextDept || undefined,
+      });
+      setOps(analysis);
+      if (analysis.departments?.length) setOpsDepartments(analysis.departments);
+      if (analysis.department) setOpsDepartment(analysis.department);
+      setStatus('Операции пересчитаны');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [opsFile, opsDepartment]);
+
   const selectKsg = useCallback(async (index: number) => {
     setBusy(true);
     setError(null);
@@ -513,6 +612,13 @@ export default function App() {
       lines.push(`Средний КЗ: ${fmtNum(ksg.avg_kz_total, 3)}`);
       lines.push(`Без услуги: ${fmtNum(ksg.no_service?.length)}`);
       lines.push(`КСЛП: ${fmtNum(ksg.kslp_issues?.length)}`);
+    } else if (tab === 'ops' && ops) {
+      lines.push('Сводка операций');
+      lines.push(`Файл: ${ops.file_name || opsFile || '—'}`);
+      lines.push(`Отделение: ${ops.department || opsDepartment || '—'}`);
+      lines.push(`Всего операций: ${fmtNum(ops.total_ops)}`);
+      lines.push(`Длительных (>${ops.long_op_hours} ч): ${fmtNum(ops.long_count)}`);
+      lines.push(`Без опер.стола: ${fmtNum(ops.missing_table_count)}`);
     } else {
       setError('Нет данных для копирования сводки');
       return;
@@ -525,7 +631,7 @@ export default function App() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [tab, emk, emkFile, department, ksg, ksgFiles, ksgActive]);
+  }, [tab, emk, emkFile, department, ksg, ksgFiles, ksgActive, ops, opsFile, opsDepartment]);
 
   const onDropFiles = useCallback(
     async (e: DragEvent) => {
@@ -551,28 +657,34 @@ export default function App() {
         setError('Не удалось подтвердить пути файлов');
         return;
       }
-      if (tab === 'ksg' || approved.length > 1) {
+      if (tab === 'ops') {
+        await loadOpsFromPath(approved[0]);
+      } else if (tab === 'ksg' || approved.length > 1) {
         await loadKsgFromPaths(approved);
       } else {
         await loadEmkFromPath(approved[0]);
       }
     },
-    [tab, loadEmkFromPath, loadKsgFromPaths],
+    [tab, loadEmkFromPath, loadKsgFromPaths, loadOpsFromPath],
   );
 
   const doExport = useCallback(
     async (opts: { format: 'xlsx' | 'txt'; sections?: Record<string, boolean> }) => {
-      const isEmk = tab === 'emk';
-      const defaultName = isEmk
-        ? `${emk?.report_basename || 'Отчет ЭМК'}.${opts.format}`
-        : `Отчет_КСГ_${ksgFiles[ksgActive]?.label || 'файл'}.${opts.format}`;
+      const method =
+        tab === 'emk' ? 'emk.export' : tab === 'ops' ? 'ops.export' : 'ksg.export';
+      const defaultName =
+        tab === 'emk'
+          ? `${emk?.report_basename || 'Отчет ЭМК'}.${opts.format}`
+          : tab === 'ops'
+            ? `Проверки_операций.${opts.format}`
+            : `Отчет_КСГ_${ksgFiles[ksgActive]?.label || 'файл'}.${opts.format}`;
       const path =
         opts.format === 'xlsx'
           ? await api().saveExcelDialog({ defaultPath: defaultName })
           : await api().saveTextDialog({ defaultPath: defaultName });
       if (!path) return;
       setStatus('Сохранение…');
-      const res = await rpc<{ path: string }>(isEmk ? 'emk.export' : 'ksg.export', {
+      const res = await rpc<{ path: string }>(method, {
         path,
         format: opts.format,
         sections: opts.sections,
@@ -657,10 +769,20 @@ export default function App() {
           <div className="brand-meta">v{version} · Electron</div>
         </div>
         <div className="topbar-actions">
-          <button className="btn btn-ghost" type="button" onClick={() => setSettingsOpen(true)}>
+          <button
+            className="btn btn-ghost"
+            type="button"
+            title="Открыть настройки приложения"
+            onClick={() => setSettingsOpen(true)}
+          >
             Настройки
           </button>
-          <button className="btn btn-ghost" type="button" onClick={toggleTheme}>
+          <button
+            className="btn btn-ghost"
+            type="button"
+            title={theme === 'dark' ? 'Переключить на светлую тему' : 'Переключить на тёмную тему'}
+            onClick={toggleTheme}
+          >
             {theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
           </button>
         </div>
@@ -670,6 +792,7 @@ export default function App() {
         <button
           type="button"
           className={`tab ${tab === 'emk' ? 'active' : ''}`}
+          title="Анализ заполнения историй болезни (ЭМК)"
           onClick={() => setTab('emk')}
         >
           Анализ ЭМК
@@ -677,22 +800,45 @@ export default function App() {
         <button
           type="button"
           className={`tab ${tab === 'ksg' ? 'active' : ''}`}
+          title="Анализ отчётов КСГ по месяцам"
           onClick={() => setTab('ksg')}
         >
           Анализ КСГ
         </button>
+        <button
+          type="button"
+          className={`tab ${tab === 'ops' ? 'active' : ''}`}
+          title="Проверки длительных операций и опер. стола"
+          onClick={() => setTab('ops')}
+        >
+          Операции
+        </button>
       </nav>
 
       <main className="workspace">
-        {error && <div className="error-banner">{error}</div>}
-        {!error && loadMappingHint && (emk || ksgFiles.length > 0) && (
+        {error && (
+          <div
+            className={
+              /не тот отчёт|не тот тип отчёта/i.test(error) ? 'info-banner' : 'error-banner'
+            }
+          >
+            {error}
+          </div>
+        )}
+        {!error && loadMappingHint && (emk || ksgFiles.length > 0 || ops) && (
           <div className="mapping-banner">{loadMappingHint}</div>
         )}
 
         {tab === 'emk' && (
           <>
             <div className="toolbar">
-              <button className="btn btn-primary" type="button" disabled={busy} onClick={loadEmk}>
+              <button
+                className="btn btn-primary"
+                type="button"
+                disabled={busy}
+                title="Выбрать Excel-отчёт по заполнению ЭМК"
+                onClick={loadEmk}
+              >
                 Загрузить Excel
               </button>
               <span className="muted toolbar-profile" title="Активный профиль формата ЭМК">
@@ -702,6 +848,7 @@ export default function App() {
                 className="btn"
                 type="button"
                 disabled={busy || !emk}
+                title="Сохранить результаты анализа ЭМК в файл"
                 onClick={() => setExportOpen(true)}
               >
                 Сохранить…
@@ -710,6 +857,7 @@ export default function App() {
                 className="btn"
                 type="button"
                 disabled={busy || !emk}
+                title="Скопировать краткую сводку ЭМК в буфер обмена"
                 onClick={() => void copySummary()}
               >
                 {copyFlash && tab === 'emk' ? 'Скопировано' : 'Копировать сводку'}
@@ -718,12 +866,13 @@ export default function App() {
                 className="btn btn-accent"
                 type="button"
                 disabled={busy || !emk || !(emk.violations_total > 0)}
+                title="Открыть текстовую сводку нарушений для копирования"
                 onClick={() => setViolOpen(true)}
               >
                 Сводка нарушений
               </button>
               {departments.length > 0 && (
-                <label className="field">
+                <label className="field" title="Фильтр анализа по отделению госпитализации">
                   Отделение
                   <select
                     value={department}
@@ -787,19 +936,20 @@ export default function App() {
                 <div className="subtabs">
                   {(
                     [
-                      ['share', 'Структура', 'section_share'],
-                      ['age', 'Возраст', 'section_age'],
-                      ['violations', 'Нарушения', 'section_violations'],
-                      ['doctors', 'Врачи', 'section_doctors'],
-                      ['skp', 'СКП', 'section_skp'],
+                      ['share', 'Структура', 'section_share', 'Доли типов нарушений'],
+                      ['age', 'Возраст', 'section_age', 'Распределение пациентов по возрасту'],
+                      ['violations', 'Нарушения', 'section_violations', 'Таблица нарушений по историям'],
+                      ['doctors', 'Врачи', 'section_doctors', 'Сводка по лечащим врачам'],
+                      ['skp', 'СКП', 'section_skp', 'Случаи краткосрочного пребывания'],
                     ] as const
                   )
                     .filter(([, , key]) => emkShow(key))
-                    .map(([id, label]) => (
+                    .map(([id, label, , tip]) => (
                     <button
                       key={id}
                       type="button"
                       className={`chip ${emkSub === id ? 'active' : ''}`}
+                      title={tip}
                       onClick={() => setEmkSub(id)}
                     >
                       {label}
@@ -865,7 +1015,13 @@ export default function App() {
         {tab === 'ksg' && (
           <>
             <div className="toolbar">
-              <button className="btn btn-primary" type="button" disabled={busy} onClick={loadKsg}>
+              <button
+                className="btn btn-primary"
+                type="button"
+                disabled={busy}
+                title="Загрузить один или несколько месячных отчётов КСГ"
+                onClick={loadKsg}
+              >
                 Загрузить КСГ
               </button>
               <span className="muted toolbar-profile" title="Активный профиль формата КСГ">
@@ -875,6 +1031,7 @@ export default function App() {
                 className="btn"
                 type="button"
                 disabled={busy || !ksgFiles.length}
+                title="Удалить активный файл КСГ из списка"
                 onClick={() => void removeKsg()}
               >
                 Удалить
@@ -883,6 +1040,7 @@ export default function App() {
                 className="btn"
                 type="button"
                 disabled={busy || !ksgFiles.length}
+                title="Пересчитать анализ активного файла КСГ"
                 onClick={() => void reanalyzeKsg()}
               >
                 Пересчитать
@@ -891,6 +1049,7 @@ export default function App() {
                 className="btn"
                 type="button"
                 disabled={busy || compareIndices.length < 2}
+                title="Сравнить отмеченные месяцы (нужно выбрать ≥ 2)"
                 onClick={() => void runCompare()}
               >
                 Сравнить месяцы
@@ -899,6 +1058,7 @@ export default function App() {
                 className="btn"
                 type="button"
                 disabled={busy || !ksg}
+                title="Сохранить результаты анализа КСГ в файл"
                 onClick={() => setExportOpen(true)}
               >
                 Сохранить…
@@ -907,6 +1067,7 @@ export default function App() {
                 className="btn"
                 type="button"
                 disabled={busy || !ksg}
+                title="Скопировать краткую сводку КСГ в буфер обмена"
                 onClick={() => void copySummary()}
               >
                 {copyFlash && tab === 'ksg' ? 'Скопировано' : 'Копировать сводку'}
@@ -922,6 +1083,7 @@ export default function App() {
                     type="button"
                     className={`chip ${ksgActive === i ? 'active' : ''}`}
                     disabled={busy}
+                    title={`Открыть анализ: ${f.label || f.name}`}
                     onClick={() => void selectKsg(i)}
                   >
                     {f.label || f.name}
@@ -936,7 +1098,15 @@ export default function App() {
                 {ksgFiles.map((f, i) => {
                   const on = compareIndices.includes(i);
                   return (
-                    <label key={f.path} className="compare-pick__item">
+                    <label
+                      key={f.path}
+                      className="compare-pick__item"
+                      title={
+                        on
+                          ? `Убрать «${f.label || f.name}» из сравнения`
+                          : `Добавить «${f.label || f.name}» к сравнению`
+                      }
+                    >
                       <input
                         type="checkbox"
                         checked={on}
@@ -984,18 +1154,19 @@ export default function App() {
                 <div className="subtabs">
                   {(
                     [
-                      ['doctors', 'Суммы по врачам', 'section_doctors'],
-                      ['cases', 'Случаи', 'section_cases'],
-                      ['ops', 'Операции', 'section_ops'],
-                      ['compare', 'Сравнение', 'section_compare'],
+                      ['doctors', 'Суммы по врачам', 'section_doctors', 'Суммы оплаты по врачам'],
+                      ['cases', 'Случаи', 'section_cases', 'Дешёвые, дорогие случаи и КСЛП'],
+                      ['ops', 'Операции', 'section_ops', 'Сводка операций в отчёте КСГ'],
+                      ['compare', 'Сравнение', 'section_compare', 'Сравнение показателей по месяцам'],
                     ] as const
                   )
                     .filter(([, , key]) => ksgShow(key))
-                    .map(([id, label]) => (
+                    .map(([id, label, , tip]) => (
                     <button
                       key={id}
                       type="button"
                       className={`chip ${ksgSub === id ? 'active' : ''}`}
+                      title={tip}
                       onClick={() => setKsgSub(id)}
                     >
                       {label}
@@ -1055,6 +1226,122 @@ export default function App() {
             )}
           </>
         )}
+
+        {tab === 'ops' && (
+          <>
+            <div className="toolbar">
+              <button
+                className="btn btn-primary"
+                type="button"
+                disabled={busy}
+                title="Загрузить отчёт по выполненным операциям и операционным столам"
+                onClick={loadOps}
+              >
+                Загрузить Excel
+              </button>
+              <span className="muted toolbar-profile" title="Активный профиль формата операций">
+                {activeProfileLabel(config, 'ops')}
+              </span>
+              <button
+                className="btn"
+                type="button"
+                disabled={busy || !ops}
+                title="Сохранить результаты проверок операций в файл"
+                onClick={() => setExportOpen(true)}
+              >
+                Сохранить…
+              </button>
+              <button
+                className="btn"
+                type="button"
+                disabled={busy || !ops}
+                title="Скопировать краткую сводку по операциям в буфер обмена"
+                onClick={() => void copySummary()}
+              >
+                {copyFlash && tab === 'ops' ? 'Скопировано' : 'Копировать сводку'}
+              </button>
+              <button
+                className="btn"
+                type="button"
+                disabled={busy || !opsFile}
+                title="Пересчитать проверки с текущими настройками и отделением"
+                onClick={() => void reanalyzeOps()}
+              >
+                Пересчитать
+              </button>
+              {opsDepartments.length > 1 && (
+                <label className="field" title="Фильтр по отделению госпитализации">
+                  Отделение
+                  <select
+                    value={opsDepartment}
+                    disabled={busy}
+                    onChange={(e) => void reanalyzeOps(e.target.value)}
+                  >
+                    {opsDepartments.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+
+            {!ops ? (
+              <div
+                className={`empty${dragOver ? ' drag-over' : ''}`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => void onDropFiles(e)}
+              >
+                <h2>Проверки операций</h2>
+                <p>
+                  Загрузите «Отчёт по выполненным операциям и операционным столам» или перетащите
+                  файл сюда.
+                </p>
+              </div>
+            ) : (
+              <>
+                <p className="muted" style={{ marginTop: 0 }}>
+                  {ops.file_name || opsFile}
+                  {(ops.department || opsDepartment) && ` · ${ops.department || opsDepartment}`}
+                  {' · '}
+                  порог длительности &gt; {ops.long_op_hours} ч
+                </p>
+                <div className="kpi-grid">
+                  <Kpi title="Всего операций" value={fmtNum(ops.total_ops)} />
+                  <Kpi title={`Длительные (>${ops.long_op_hours} ч)`} value={fmtNum(ops.long_count)} />
+                  <Kpi title="Без опер.стола" value={fmtNum(ops.missing_table_count)} />
+                </div>
+                <div className="subtabs">
+                  {(
+                    [
+                      ['long', `Длительные (${ops.long_count})`, 'Операции дольше порога длительности'],
+                      ['table', `Без опер.стола (${ops.missing_table_count})`, 'Операции без указания операционного стола'],
+                    ] as const
+                  ).map(([id, label, tip]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`chip ${opsSub === id ? 'active' : ''}`}
+                      title={tip}
+                      onClick={() => setOpsSub(id)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="panel">
+                  {opsSub === 'long' && <DataTable rows={ops.long_ops} />}
+                  {opsSub === 'table' && <DataTable rows={ops.missing_table} />}
+                </div>
+              </>
+            )}
+          </>
+        )}
       </main>
 
       <footer className="status-line">
@@ -1076,6 +1363,7 @@ export default function App() {
             }
             if (emkFile) await reanalyzeEmk(department);
             if (ksgFiles.length) await reanalyzeKsg();
+            if (opsFile) await reanalyzeOps();
           }}
         />
       )}
@@ -1089,11 +1377,13 @@ export default function App() {
 
       {exportOpen && (
         <ExportDialog
-          kind={tab === 'emk' ? 'emk' : 'ksg'}
+          kind={tab === 'emk' ? 'emk' : tab === 'ops' ? 'ops' : 'ksg'}
           defaultName={
             tab === 'emk'
               ? emk?.report_basename || 'Отчет ЭМК'
-              : `Отчет_КСГ_${ksgFiles[ksgActive]?.label || 'файл'}`
+              : tab === 'ops'
+                ? 'Проверки_операций'
+                : `Отчет_КСГ_${ksgFiles[ksgActive]?.label || 'файл'}`
           }
           onClose={() => setExportOpen(false)}
           onExport={doExport}

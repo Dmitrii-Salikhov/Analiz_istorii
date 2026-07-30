@@ -24,10 +24,13 @@ const ALLOWED_RPC = new Set([
   'ksg.reanalyze',
   'ksg.compare',
   'ksg.export',
+  'ops.load',
+  'ops.analyze',
+  'ops.export',
 ]);
 
-const LOAD_METHODS = new Set(['emk.load', 'ksg.load']);
-const EXPORT_METHODS = new Set(['emk.export', 'ksg.export']);
+const LOAD_METHODS = new Set(['emk.load', 'ksg.load', 'ops.load']);
+const EXPORT_METHODS = new Set(['emk.export', 'ksg.export', 'ops.export']);
 
 const EXCEL_EXT = new Set(['.xlsx', '.xls', '.xlsm']);
 const EXPORT_EXT = new Set(['.xlsx', '.txt']);

@@ -35,8 +35,9 @@ def test_tokens_and_tags():
 
 
 def test_short_month_label_from_name():
-    assert "май" in short_month_label("КСГ за май 2026.xlsx")
-    assert "2026" in short_month_label("КСГ за май 2026.xlsx")
+    assert short_month_label("КСГ за май 2026.xlsx") == "май 2026"
+    assert short_month_label("КСГ июнь 2026.xlsx") == "июнь 2026"
+    assert "сентябрь" in short_month_label("отчёт сентябрь 2025.xlsx")
 
 
 def test_chart_color_ids():

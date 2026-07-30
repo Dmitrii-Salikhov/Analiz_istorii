@@ -21,8 +21,20 @@ export function Modal({
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
+        aria-label={title}
       >
-        <h2>{title}</h2>
+        <div className="modal__head">
+          <h2>{title}</h2>
+          <button
+            type="button"
+            className="modal-close"
+            onClick={onClose}
+            title="Закрыть окно"
+            aria-label="Закрыть"
+          >
+            ×
+          </button>
+        </div>
         {hint ? <p className="modal__hint">{hint}</p> : null}
         {children}
       </div>

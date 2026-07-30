@@ -4,6 +4,7 @@ from excel_io import (
     apply_column_aliases,
     build_rename_map,
     clean_column_name,
+    detect_report_kinds,
     find_header_row,
     list_departments,
     load_excel_with_header,
@@ -137,3 +138,41 @@ def test_custom_profile_header_fragments(tmp_path):
     assert loaded.mapping is not None
     assert loaded.mapping.profile_id == "custom"
     assert loaded.dataframe.iloc[0]["Номер КВС"] == "A1"
+
+
+def test_wrong_report_hint_ops_file_on_emk(tmp_path):
+    from excel_io import HeaderNotFoundError, load_lor_excel, load_ops_excel
+
+    path = tmp_path / "ops.xlsx"
+    pd.DataFrame(
+        {
+            "Дата начала операции": ["01.01.2026"],
+            "№ истории": ["26/1"],
+            "Услуга": ["A16.08.001"],
+            "Опер.стол": ["1"],
+        }
+    ).to_excel(path, index=False)
+
+    assert "ops" in detect_report_kinds(str(path))
+    with pytest.raises(HeaderNotFoundError) as exc:
+        load_lor_excel(str(path))
+    text = str(exc.value)
+    assert "Похоже, загружен не тот отчёт" in text
+    assert "Анализ ЭМК" in text
+    assert "Операции" in text
+
+    # correct tab still loads
+    loaded = load_ops_excel(str(path))
+    assert len(loaded.dataframe) == 1
+
+
+def test_wrong_report_hint_unknown_file(tmp_path):
+    from excel_io import HeaderNotFoundError, load_ops_excel
+
+    path = tmp_path / "junk.xlsx"
+    pd.DataFrame({"A": [1], "B": [2]}).to_excel(path, index=False)
+    with pytest.raises(HeaderNotFoundError) as exc:
+        load_ops_excel(str(path))
+    text = str(exc.value)
+    assert "Возможно, загружен не тот тип отчёта" in text
+    assert "Операции" in text

@@ -25,8 +25,10 @@ export type ReportProfile = {
 export type ReportProfilesConfig = {
   emk_active?: string;
   ksg_active?: string;
+  ops_active?: string;
   emk?: Record<string, ReportProfile>;
   ksg?: Record<string, ReportProfile>;
+  ops?: Record<string, ReportProfile>;
 };
 
 export type AppConfig = {
@@ -38,6 +40,7 @@ export type AppConfig = {
   kslp_age_max?: number;
   kslp_senior_age?: number;
   long_stay_days?: number;
+  long_op_hours?: number;
   kslp_operations_codes?: string[];
   kslp_rules?: KslpRule[];
   preferred_department?: string;
@@ -48,9 +51,10 @@ export type AppConfig = {
   ksg_display?: DisplayMap;
   last_main_tab?: number;
   ui_prefs?: {
-    main_tab?: 'emk' | 'ksg';
+    main_tab?: 'emk' | 'ksg' | 'ops';
     emk_sub?: string;
     ksg_sub?: string;
+    ops_sub?: string;
     compare_charts?: {
       patients?: boolean;
       sum?: boolean;
@@ -149,7 +153,7 @@ export function SettingsDialog({
   const [draftName, setDraftName] = useState('');
   const [ruleError, setRuleError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [formatKind, setFormatKind] = useState<'emk' | 'ksg'>('emk');
+  const [formatKind, setFormatKind] = useState<'emk' | 'ksg' | 'ops'>('emk');
 
   const opLabel = useMemo(() => {
     const map = new Map<string, string>();
@@ -272,6 +276,19 @@ export function SettingsDialog({
             key={id}
             type="button"
             className={`chip ${tab === id ? 'active' : ''}`}
+            title={
+              id === 'display'
+                ? 'Что показывать на экране ЭМК и КСГ'
+                : id === 'levels'
+                  ? 'Пороги длительности, сумм КСГ и возраста КСЛП'
+                  : id === 'kslp'
+                    ? 'Правила комбинаций операций для КСЛП'
+                    : id === 'formats'
+                      ? 'Синонимы колонок Excel — менять осторожно'
+                      : id === 'department'
+                        ? 'Отделение по умолчанию при загрузке'
+                        : 'Обновления и репозиторий GitHub'
+            }
             onClick={() => setTab(id)}
           >
             {label}
@@ -324,6 +341,21 @@ export function SettingsDialog({
               value={String(cfg.long_stay_days ?? 7)}
               onChange={(e) => set('long_stay_days', Math.max(1, Number(e.target.value) || 7))}
             />
+          </div>
+          <div className="form-row">
+            <label>Длительная операция — порог часов (&gt;)</label>
+            <input
+              type="number"
+              min={0.5}
+              step={0.5}
+              value={String(cfg.long_op_hours ?? 4)}
+              onChange={(e) =>
+                set('long_op_hours', Math.max(0.5, Number(e.target.value) || 4))
+              }
+            />
+            <p className="muted" style={{ margin: 0 }}>
+              Для вкладки «Операции». По умолчанию более 4 часов.
+            </p>
           </div>
           <div className="form-row">
             <label>Порог «дешёвых» КСГ (&lt;), ₽</label>
@@ -400,12 +432,22 @@ export function SettingsDialog({
               className="btn btn-primary"
               type="button"
               disabled={!draftCodes.length}
+              title={
+                editingId
+                  ? 'Сохранить изменения в выбранном правиле КСЛП'
+                  : 'Добавить новое правило комбинации операций'
+              }
               onClick={saveRule}
             >
               {editingId ? 'Сохранить правило' : 'Добавить правило'}
             </button>
             {editingId && (
-              <button className="btn" type="button" onClick={cancelEditRule}>
+              <button
+                className="btn"
+                type="button"
+                title="Отменить редактирование правила"
+                onClick={cancelEditRule}
+              >
                 Отмена
               </button>
             )}
@@ -430,6 +472,7 @@ export function SettingsDialog({
                         <button
                           className="btn"
                           type="button"
+                          title="Изменить это правило КСЛП"
                           onClick={() => startEditRule(rule)}
                         >
                           Изменить
@@ -437,6 +480,7 @@ export function SettingsDialog({
                         <button
                           className="btn"
                           type="button"
+                          title="Удалить это правило КСЛП"
                           onClick={() => removeRule(rule.id)}
                         >
                           Удалить
@@ -463,8 +507,13 @@ export function SettingsDialog({
 
       {tab === 'formats' && (() => {
         const rp = cfg.report_profiles || {};
-        const activeKey = formatKind === 'emk' ? 'emk_active' : 'ksg_active';
-        const bucket = formatKind === 'emk' ? 'emk' : 'ksg';
+        const activeKey =
+          formatKind === 'emk'
+            ? 'emk_active'
+            : formatKind === 'ksg'
+              ? 'ksg_active'
+              : 'ops_active';
+        const bucket = formatKind;
         const activeId = (rp[activeKey] as string) || 'default';
         const profiles = (rp[bucket] as Record<string, ReportProfile>) || {};
         const profileIds = Object.keys(profiles).length
@@ -510,15 +559,26 @@ export function SettingsDialog({
           patchProfiles({
             emk_active: 'default',
             ksg_active: 'default',
+            ops_active: 'default',
             emk: {},
             ksg: {},
+            ops: {},
           });
         };
 
+        const kindLabel =
+          formatKind === 'emk' ? 'ЭМК' : formatKind === 'ksg' ? 'КСГ' : 'Операции';
+
         return (
           <div className="form-grid">
+            <div className="github-lock">
+              <p className="muted" style={{ margin: 0 }}>
+                Не меняйте, если не уверены: от этого зависит распознавание колонок в Excel-отчётах.
+                Ошибочные алиасы могут привести к тому, что файлы перестанут загружаться.
+              </p>
+            </div>
             <div className="form-row inline" style={{ gap: 16 }}>
-              <label className="inline">
+              <label className="inline" title="Профиль формата отчёта ЭМК">
                 <input
                   type="radio"
                   checked={formatKind === 'emk'}
@@ -526,7 +586,7 @@ export function SettingsDialog({
                 />
                 ЭМК
               </label>
-              <label className="inline">
+              <label className="inline" title="Профиль формата отчёта КСГ">
                 <input
                   type="radio"
                   checked={formatKind === 'ksg'}
@@ -534,9 +594,17 @@ export function SettingsDialog({
                 />
                 КСГ
               </label>
+              <label className="inline" title="Профиль формата отчёта по операциям">
+                <input
+                  type="radio"
+                  checked={formatKind === 'ops'}
+                  onChange={() => setFormatKind('ops')}
+                />
+                Операции
+              </label>
             </div>
             <div className="form-row">
-              <label>Активный профиль ({formatKind === 'emk' ? 'ЭМК' : 'КСГ'})</label>
+              <label>Активный профиль ({kindLabel})</label>
               <select
                 value={activeId}
                 onChange={(e) => setActiveProfile(e.target.value)}
@@ -584,7 +652,12 @@ export function SettingsDialog({
               )}
             </div>
             <div className="form-row">
-              <button className="btn" type="button" onClick={resetDefaults}>
+              <button
+                className="btn"
+                type="button"
+                title="Вернуть стандартные профили форматов ЭМК, КСГ и операций"
+                onClick={resetDefaults}
+              >
                 Сбросить к стандартным
               </button>
             </div>
@@ -616,7 +689,12 @@ export function SettingsDialog({
             {!githubUnlocked ? (
               <div className="github-lock">
                 <code>{cfg.github_repo || '—'}</code>
-                <button className="btn" type="button" onClick={unlockGithub}>
+                <button
+                  className="btn"
+                  type="button"
+                  title="Разблокировать изменение адреса репозитория"
+                  onClick={unlockGithub}
+                >
                   Изменить…
                 </button>
                 <p className="muted" style={{ margin: 0 }}>
@@ -644,13 +722,14 @@ export function SettingsDialog({
       {error && <div className="error-banner" style={{ marginTop: 12 }}>{error}</div>}
 
       <div className="modal__actions">
-        <button className="btn" type="button" onClick={onClose}>
+        <button className="btn" type="button" title="Закрыть без сохранения" onClick={onClose}>
           Отмена
         </button>
         <button
           className="btn btn-primary"
           type="button"
           disabled={busy}
+          title="Сохранить настройки и закрыть окно"
           onClick={async () => {
             setBusy(true);
             setError(null);
