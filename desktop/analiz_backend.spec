@@ -46,7 +46,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(SPECDIR / "pyi_rth_utf8.py")],
     excludes=[
         "matplotlib",
         "ttkbootstrap",

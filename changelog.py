@@ -6,6 +6,14 @@ from updater import parse_version
 # Новые версии — в начале списка.
 CHANGELOG: list[dict] = [
     {
+        "version": "1.1.4",
+        "title": "Что нового в версии 1.1.4",
+        "items": [
+            "Исправлен обмен Electron ↔ Python на Windows: UTF-8 для кириллических "
+            "путей и текстов (загрузка Excel, названия профилей).",
+        ],
+    },
+    {
         "version": "1.1.3",
         "title": "Что нового в версии 1.1.3",
         "items": [

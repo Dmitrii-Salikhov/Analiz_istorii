@@ -73,6 +73,8 @@ class PythonBridge {
       ...process.env,
       ANALIZ_BASE_DIR: root,
       PYTHONUNBUFFERED: '1',
+      PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8',
       PYTHONPATH: root,
     };
 
@@ -80,14 +82,19 @@ class PythonBridge {
       cwd: root,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
     });
+
+    // Decode stdout as UTF-8 explicitly (Windows default can be system code page).
+    this.proc.stdout.setEncoding('utf8');
+    this.proc.stderr.setEncoding('utf8');
 
     const rl = readline.createInterface({ input: this.proc.stdout });
     rl.on('line', (line) => this._onLine(line));
 
-    this.proc.stderr.on('data', (buf) => {
-      const text = buf.toString();
-      if (text.trim()) console.error('[bridge]', text.trimEnd());
+    this.proc.stderr.on('data', (text) => {
+      const s = typeof text === 'string' ? text : text.toString('utf8');
+      if (s.trim()) console.error('[bridge]', s.trimEnd());
     });
 
     this.proc.on('exit', (code) => {
@@ -149,7 +156,7 @@ class PythonBridge {
           reject(e);
         },
       });
-      this.proc.stdin.write(payload, (err) => {
+      this.proc.stdin.write(payload, 'utf8', (err) => {
         if (err) {
           clearTimeout(timer);
           this.pending.delete(id);
