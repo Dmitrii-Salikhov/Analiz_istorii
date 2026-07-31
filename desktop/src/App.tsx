@@ -14,7 +14,7 @@ import {
   ViolationsSummaryDialog,
   type ViolationSection,
 } from './components/ViolationsSummaryDialog';
-import { copyText } from './lib/clipboard';
+import { copyText, opsRowsToCompactCopy } from './lib/clipboard';
 import './App.css';
 
 type Theme = 'dark' | 'light';
@@ -595,14 +595,17 @@ export default function App() {
   const copySummary = useCallback(async () => {
     const lines: string[] = [];
     if (tab === 'emk' && emk) {
-      lines.push('Сводка ЭМК');
-      lines.push(`Файл: ${emk.file_name || emkFile || '—'}`);
+      const period =
+        emk.period_start || emk.period_end
+          ? `${fmtDateRu(emk.period_start)} — ${fmtDateRu(emk.period_end)}`
+          : null;
+      lines.push(period ? `Сводка ЭМК за ${period}` : 'Сводка ЭМК');
       lines.push(`Отделение: ${emk.department || department || '—'}`);
-      lines.push(`Пациенты: ${fmtNum(emk.total_patients)}`);
-      lines.push(`Ср. койко-дни: ${fmtNum(emk.avg_beddays, 1)}`);
+      lines.push(`Пациентов выписано: ${fmtNum(emk.total_patients)}`);
+      lines.push(`Средний койко-день: ${fmtNum(emk.avg_beddays, 1)}`);
       lines.push(`Экстренные: ${fmtNum(emk.urgent)}`);
       lines.push(`Плановые: ${fmtNum(emk.planned)}`);
-      lines.push(`Нарушения: ${fmtNum(emk.violations_total)}`);
+      lines.push(`Нарушения всего: ${fmtNum(emk.violations_total)}`);
       lines.push(`СКП: ${fmtNum(emk.skp_count)}`);
     } else if (tab === 'ksg' && ksg) {
       lines.push('Сводка КСГ');
@@ -631,7 +634,7 @@ export default function App() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [tab, emk, emkFile, department, ksg, ksgFiles, ksgActive, ops, opsFile, opsDepartment]);
+  }, [tab, emk, department, ksg, ksgFiles, ksgActive, ops, opsFile, opsDepartment]);
 
   const onDropFiles = useCallback(
     async (e: DragEvent) => {
@@ -1335,8 +1338,12 @@ export default function App() {
                   ))}
                 </div>
                 <div className="panel">
-                  {opsSub === 'long' && <DataTable rows={ops.long_ops} />}
-                  {opsSub === 'table' && <DataTable rows={ops.missing_table} />}
+                  {opsSub === 'long' && (
+                    <DataTable rows={ops.long_ops} formatCopy={opsRowsToCompactCopy} />
+                  )}
+                  {opsSub === 'table' && (
+                    <DataTable rows={ops.missing_table} formatCopy={opsRowsToCompactCopy} />
+                  )}
                 </div>
               </>
             )}

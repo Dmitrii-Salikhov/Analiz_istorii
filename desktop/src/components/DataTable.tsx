@@ -8,6 +8,7 @@ export function DataTable({
   filterable = true,
   copyable = true,
   filterPlaceholder = 'Поиск по таблице…',
+  formatCopy,
   getCellClass,
 }: {
   rows: Record<string, unknown>[];
@@ -15,6 +16,8 @@ export function DataTable({
   filterable?: boolean;
   copyable?: boolean;
   filterPlaceholder?: string;
+  /** Если задан — используется вместо TSV при копировании. */
+  formatCopy?: (rows: Record<string, unknown>[]) => string;
   getCellClass?: (
     row: Record<string, unknown>,
     col: string,
@@ -39,7 +42,8 @@ export function DataTable({
 
   const onCopy = async () => {
     try {
-      await copyText(rowsToTsv(filtered));
+      const text = formatCopy ? formatCopy(filtered) : rowsToTsv(filtered);
+      await copyText(text);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
