@@ -63,6 +63,26 @@ def test_departments_helpers():
     assert pick_default_department([], None) is None
 
 
+def test_pick_default_prefers_exact_therapeutic_over_molokovo():
+    """«Терапевтическое отделение» ≠ «Второе терапевтическое отделение Молоково»."""
+    deps = sorted(
+        [
+            "Второе терапевтическое отделение Молоково",
+            "Терапевтическое отделение",
+            "Оториноларингологическое отделение",
+        ],
+        key=lambda s: s.lower(),
+    )
+    assert pick_default_department(deps, "Терапевтическое отделение") == (
+        "Терапевтическое отделение"
+    )
+    assert pick_default_department(deps, "Второе терапевтическое отделение Молоково") == (
+        "Второе терапевтическое отделение Молоково"
+    )
+    # короткий preferred — берём ближайшее по длине, не «Второе…»
+    assert pick_default_department(deps, "терапевтическое") == "Терапевтическое отделение"
+
+
 def test_emk_synonym_nomer_kvs():
     aliases = DEFAULT_EMK_PROFILE["aliases"]
     rename, report = build_rename_map(["№ КВС", "Лечащий врач"], aliases)

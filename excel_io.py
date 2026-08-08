@@ -512,15 +512,40 @@ def pick_default_department(
     departments: Iterable[str],
     preferred: str | None = None,
 ) -> str | None:
+    """Выбор отделения: точное совпадение с preferred, иначе ближайшее по имени.
+
+    Важно: «Терапевтическое отделение» не должно матчиться на
+    «Второе терапевтическое отделение Молоково» раньше точного совпадения
+    (раньше бралось первое substring-совпадение в алфавитном списке).
+    """
     deps = list(departments)
     if not deps:
         return None
-    if preferred:
-        preferred_l = preferred.lower()
+    preferred_s = (preferred or "").strip()
+    if preferred_s:
+        preferred_l = preferred_s.lower()
+        # 1) точное совпадение (без учёта регистра)
         for d in deps:
-            if preferred_l in d.lower() or d.lower() in preferred_l:
+            if str(d).strip().lower() == preferred_l:
                 return d
+        # 2) частичное: предпочитаем имя ближе всего к preferred по длине
+        candidates: list[str] = []
         for d in deps:
-            if "оторинолар" in d.lower() or "лор" in d.lower():
+            dl = str(d).strip().lower()
+            if preferred_l in dl or dl in preferred_l:
+                candidates.append(d)
+        if candidates:
+            candidates.sort(
+                key=lambda d: (
+                    abs(len(str(d).strip()) - len(preferred_s)),
+                    len(str(d).strip()),
+                    str(d).lower(),
+                )
+            )
+            return candidates[0]
+        # 3) запасной вариант для ЛОР, если preferred не найден в файле
+        for d in deps:
+            dl = str(d).lower()
+            if "оторинолар" in dl or "лор" in dl:
                 return d
     return deps[0]
