@@ -13,6 +13,15 @@ export type AnalizApi = {
   /** Confirm Excel paths from drag-and-drop before emk.load / ksg.load */
   approveLoadPaths?: (paths: string[]) => Promise<string[]>;
   getPathForFile?: (file: File) => string | null;
+  syncMenuState?: (state: {
+    recent_emk?: string[];
+    recent_ksg?: string[];
+    recent_ops?: string[];
+    date_format?: string;
+  }) => Promise<{ ok: boolean }>;
+  onMenuAction?: (
+    callback: (payload: { action: string; payload?: Record<string, unknown> }) => void,
+  ) => () => void;
 };
 
 declare global {

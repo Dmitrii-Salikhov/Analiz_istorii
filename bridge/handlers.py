@@ -39,8 +39,12 @@ from lor_analysis import (
     analyze_lor,
     emk_report_basename,
     filter_by_department,
+    filter_by_departments,
+    format_department_scope_label,
     format_violations_summary_sections,
     violation_share_table,
+    EMK_VARIANT_CURRENT,
+    EMK_VARIANT_DISCHARGED,
 )
 from ops_analysis import analyze_ops, list_ops_departments
 from updater import read_current_version
@@ -52,7 +56,11 @@ _EMK: dict[str, Any] = {
     "df_full": None,
     "departments": [],
     "department": "",
+    "scope": "single",
+    "departments_selected": [],
     "analysis": None,
+    "emk_variant": EMK_VARIANT_DISCHARGED,
+    "as_of": None,
 }
 _KSG: dict[str, Any] = {
     "files": [],  # [{name, path, df, results, label}]
@@ -129,7 +137,26 @@ def _ensure_ksg_reference() -> tuple[dict, str]:
     return _KSG["reference"], _KSG["reference_status"]
 
 
-def _emk_payload(result, department: str) -> dict[str, Any]:
+def _parse_as_of(raw: Any) -> date | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError as exc:
+        raise ValueError("as_of: ожидается дата в формате ГГГГ-ММ-ДД") from exc
+
+
+def _emk_payload(
+    result,
+    department_label: str,
+    *,
+    scope: str,
+    departments_in_scope: list[str],
+    departments_total: int,
+    emk_variant: str,
+    as_of: date | None = None,
+) -> dict[str, Any]:
     share = violation_share_table(result.violations_df)
     viol_df = result.violations_df
     if viol_df is not None and not viol_df.empty and "КВС" in viol_df.columns:
@@ -138,13 +165,26 @@ def _emk_payload(result, department: str) -> dict[str, Any]:
         with_viol = 0
     total = int(result.total_patients or 0)
     without_viol = max(0, total - with_viol)
+    from excel_io import EMK_VARIANT_LABELS
+
     return {
-        "department": department,
+        "department": department_label,
+        "scope": scope,
+        "departments_in_scope": departments_in_scope,
+        "departments_total": departments_total,
+        "emk_variant": emk_variant,
+        "emk_variant_label": EMK_VARIANT_LABELS.get(emk_variant, emk_variant),
+        "as_of": _json_safe(as_of or result.period_end),
         "file_name": _EMK.get("file_name"),
         "path": _EMK.get("path"),
         "period_start": _json_safe(result.period_start),
         "period_end": _json_safe(result.period_end),
-        "report_basename": emk_report_basename(result.period_start, result.period_end),
+        "report_basename": emk_report_basename(
+            result.period_start,
+            result.period_end,
+            emk_variant=emk_variant,
+            as_of=as_of,
+        ),
         "total_patients": result.total_patients,
         "avg_beddays": result.avg_beddays,
         "urgent": result.urgent,
@@ -164,6 +204,41 @@ def _emk_payload(result, department: str) -> dict[str, Any]:
         "cases_with_violations": with_viol,
         "cases_without_violations": without_viol,
     }
+
+
+def _parse_emk_scope(params: dict[str, Any]) -> tuple[str, str, list[str]]:
+    scope = str(params.get("scope") or "single").strip().lower()
+    if scope not in ("single", "multi", "all"):
+        scope = "single"
+    department = str(params.get("department") or "").strip()
+    raw_deps = params.get("departments")
+    departments: list[str] = []
+    if isinstance(raw_deps, list):
+        departments = [str(d).strip() for d in raw_deps if str(d).strip()]
+    return scope, department, departments
+
+
+def _emk_filter_dataframe(
+    df_full: pd.DataFrame,
+    scope: str,
+    department: str,
+    departments: list[str],
+) -> tuple[pd.DataFrame, list[str]]:
+    all_depts = list_departments(df_full)
+    if scope == "all":
+        return df_full.copy(), all_depts
+    if scope == "multi":
+        if not departments:
+            raise ValueError("Выберите хотя бы одно отделение")
+        filtered = filter_by_departments(df_full, departments)
+        if filtered.empty:
+            raise ValueError("Нет данных по выбранным отделениям")
+        return filtered, departments
+    filtered = filter_by_department(df_full, department or None)
+    if filtered.empty and department:
+        raise ValueError(f"Нет данных по отделению «{department}»")
+    active = [department] if department else []
+    return filtered, active
 
 
 def _ksg_file_summary(item: dict[str, Any]) -> dict[str, Any]:
@@ -208,6 +283,12 @@ def app_version(_params: dict[str, Any]) -> dict[str, Any]:
     return {"version": read_current_version()}
 
 
+def app_changelog(_params: dict[str, Any]) -> dict[str, Any]:
+    from changelog import CHANGELOG
+
+    return {"entries": CHANGELOG[:8]}
+
+
 def config_get(_params: dict[str, Any]) -> dict[str, Any]:
     return {"config": load_config()}
 
@@ -231,6 +312,7 @@ _CONFIG_SET_ALLOWED = frozenset(
         "github_repo",
         "check_updates_on_start",
         "emk_display",
+        "emk_info_checks",
         "ksg_display",
         "ui_prefs",
         "last_main_tab",
@@ -259,7 +341,9 @@ def config_set(params: dict[str, Any]) -> dict[str, Any]:
             continue
         if key == "github_repo":
             cfg[key] = _validate_github_repo(value)
-        elif key in ("emk_display", "ksg_display", "ui_prefs") and not isinstance(value, dict):
+        elif key in ("emk_display", "emk_info_checks", "ksg_display", "ui_prefs") and not isinstance(
+            value, dict
+        ):
             raise ValueError(f"{key} must be an object")
         elif key == "kslp_rules" and not isinstance(value, list):
             raise ValueError("kslp_rules must be a list")
@@ -283,7 +367,13 @@ def emk_load(params: dict[str, Any]) -> dict[str, Any]:
     profile = get_active_profile(cfg, "emk")
     loaded = load_lor_excel(str(path), profile=profile, config=cfg)
     df = loaded.dataframe
-    departments = list_departments(df)
+    variant = loaded.emk_variant or EMK_VARIANT_DISCHARGED
+    if variant == EMK_VARIANT_CURRENT:
+        from lor_analysis import collapse_current_patients_to_unique_kvs
+
+        departments = list_departments(collapse_current_patients_to_unique_kvs(df))
+    else:
+        departments = list_departments(df)
     preferred = pick_default_department(departments, cfg.get("preferred_department"))
     known = list(cfg.get("known_departments") or [])
     for d in departments:
@@ -296,9 +386,15 @@ def emk_load(params: dict[str, Any]) -> dict[str, Any]:
     _EMK["departments"] = departments
     _EMK["analysis"] = None
     _EMK["department"] = ""
+    _EMK["scope"] = "single"
+    _EMK["departments_selected"] = []
+    _EMK["emk_variant"] = variant
+    _EMK["as_of"] = None
     push_recent_file(cfg, "recent_emk", str(path))
     save_config(cfg)
     mapping = loaded.mapping.to_dict() if loaded.mapping else None
+    from excel_io import EMK_VARIANT_LABELS
+
     return {
         "path": str(path),
         "file_name": path.name,
@@ -310,23 +406,54 @@ def emk_load(params: dict[str, Any]) -> dict[str, Any]:
         "profile_id": profile.get("id"),
         "profile_name": profile.get("name"),
         "mapping": mapping,
+        "emk_variant": variant,
+        "emk_variant_label": EMK_VARIANT_LABELS.get(variant, variant),
     }
 
 
 def emk_analyze(params: dict[str, Any]) -> dict[str, Any]:
     if _EMK["df_full"] is None:
         raise RuntimeError("Сначала загрузите файл ЭМК")
-    department = str(params.get("department") or "").strip()
-    df = filter_by_department(_EMK["df_full"], department or None)
+    df_full = _EMK["df_full"]
+    all_depts = list_departments(df_full)
+    scope, department, departments = _parse_emk_scope(params)
+    df, departments_in_scope = _emk_filter_dataframe(df_full, scope, department, departments)
     cfg = load_config()
-    result = analyze_lor(df, cfg)
+    variant = str(_EMK.get("emk_variant") or EMK_VARIANT_DISCHARGED)
+    as_of = _parse_as_of(params.get("as_of"))
+    if as_of is None and isinstance(_EMK.get("as_of"), date):
+        as_of = _EMK["as_of"]
+    if variant == EMK_VARIANT_CURRENT and as_of is None:
+        as_of = date.today()
+    result = analyze_lor(df, cfg, emk_variant=variant, as_of=as_of)
+    department_label = format_department_scope_label(
+        scope,
+        department=department,
+        departments=departments_in_scope,
+        departments_total=len(all_depts),
+    )
     _EMK["analysis"] = result
-    _EMK["department"] = department
-    payload = _emk_payload(result, department)
-    payload["long_stay_days"] = int(cfg.get("long_stay_days", 7))
+    _EMK["department"] = department_label
+    _EMK["scope"] = scope
+    _EMK["departments_selected"] = list(departments_in_scope)
+    _EMK["as_of"] = as_of
+    group_by_department = scope in ("multi", "all")
+    long_stay_days = int(cfg.get("long_stay_days", 7))
+    payload = _emk_payload(
+        result,
+        department_label,
+        scope=scope,
+        departments_in_scope=departments_in_scope,
+        departments_total=len(all_depts),
+        emk_variant=variant,
+        as_of=as_of,
+    )
+    payload["long_stay_days"] = long_stay_days
     payload["violations_summary"] = format_violations_summary_sections(
         result.violations_df,
-        long_stay_days=int(cfg.get("long_stay_days", 7)),
+        long_stay_days=long_stay_days,
+        group_by_department=group_by_department,
+        department_order=departments_in_scope if group_by_department else None,
     )
     return payload
 
@@ -337,10 +464,16 @@ def emk_violations_summary(_params: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("Сначала выполните анализ ЭМК")
     cfg = load_config()
     days = int(cfg.get("long_stay_days", 7))
+    scope = str(_EMK.get("scope") or "single")
+    group_by_department = scope in ("multi", "all")
+    dept_order = _EMK.get("departments_selected") if group_by_department else None
     return {
         "long_stay_days": days,
         "sections": format_violations_summary_sections(
-            result.violations_df, long_stay_days=days
+            result.violations_df,
+            long_stay_days=days,
+            group_by_department=group_by_department,
+            department_order=dept_order if isinstance(dept_order, list) else None,
         ),
     }
 
@@ -633,6 +766,7 @@ def ops_export(params: dict[str, Any]) -> dict[str, Any]:
 HANDLERS = {
     "ping": ping,
     "app.version": app_version,
+    "app.changelog": app_changelog,
     "config.get": config_get,
     "config.set": config_set,
     "ref.operations": ref_operations,

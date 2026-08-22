@@ -48,6 +48,7 @@ export type AppConfig = {
   github_repo?: string;
   check_updates_on_start?: boolean;
   emk_display?: DisplayMap;
+  emk_info_checks?: DisplayMap;
   ksg_display?: DisplayMap;
   last_main_tab?: number;
   ui_prefs?: {
@@ -61,8 +62,14 @@ export type AppConfig = {
       kz?: boolean;
       kslp?: boolean;
     };
+    emk_scope_mode?: 'single' | 'summary';
+    emk_summary_mode?: 'all' | 'multi';
+    emk_selected_departments?: string[];
   };
   report_profiles?: ReportProfilesConfig;
+  recent_emk?: string[];
+  recent_ksg?: string[];
+  recent_ops?: string[];
 };
 
 const EMK_KPI: [string, string][] = [
@@ -80,6 +87,14 @@ const EMK_SECTIONS: [string, string][] = [
   ['section_violations', 'Раздел: нарушения (таблица)'],
   ['section_doctors', 'Раздел: врачи'],
   ['section_skp', 'Раздел: СКП'],
+];
+
+const EMK_INFO_CHECKS: [string, string][] = [
+  ['lab', 'Лабораторные исследования (справочно)'],
+  ['instr', 'Инструментальные исследования (справочно)'],
+  ['cons', 'Консультативные услуги (справочно)'],
+  ['rean', 'Реанимационные дневники (справочно)'],
+  ['emd', 'ЭМД выписной эпикриз в хранилище (справочно)'],
 ];
 
 const KSG_KPI: [string, string][] = [
@@ -180,6 +195,13 @@ export function SettingsDialog({
     setCfg((prev) => ({
       ...prev,
       [scope]: { ...(prev[scope] || {}), [key]: on },
+    }));
+  };
+
+  const setInfoCheck = (key: string, on: boolean) => {
+    setCfg((prev) => ({
+      ...prev,
+      emk_info_checks: { ...(prev.emk_info_checks || {}), [key]: on },
     }));
   };
 
@@ -333,6 +355,24 @@ export function SettingsDialog({
 
       {tab === 'levels' && (
         <div className="form-grid">
+          <div className="form-row">
+            <label>ЭМК — справочные проверки</label>
+            <p className="muted" style={{ margin: '0 0 8px' }}>
+              Не строгие нарушения: можно отключить. На рейтинг врача не влияют.
+            </p>
+            <div className="check-list">
+              {EMK_INFO_CHECKS.map(([key, label]) => (
+                <label key={key}>
+                  <input
+                    type="checkbox"
+                    checked={cfg.emk_info_checks?.[key] !== false}
+                    onChange={(e) => setInfoCheck(key, e.target.checked)}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
           <div className="form-row">
             <label>Длительная госпитализация — порог койко-дней (&gt;)</label>
             <input

@@ -27,6 +27,16 @@ export function ViolationsSummaryDialog({
       .join('\n\n');
   }, [sections, selected]);
 
+  const allSelected = useMemo(
+    () => sections.length > 0 && sections.every((s) => selected[s.id]),
+    [sections, selected],
+  );
+
+  const toggleAll = () => {
+    const next = !allSelected;
+    setSelected(Object.fromEntries(sections.map((s) => [s.id, next])));
+  };
+
   const copy = async (text: string, okMsg: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -38,17 +48,12 @@ export function ViolationsSummaryDialog({
   };
 
   return (
-    <Modal
-      title="Сводка нарушений"
-      wide
-      onClose={onClose}
-      hint="Отметьте категории и скопируйте в буфер — как в прежней версии."
-    >
+    <Modal title="Сводка нарушений" wide onClose={onClose}>
       {!sections.length ? (
         <div className="muted">Нарушений нет</div>
       ) : (
         <>
-          <div className="modal__actions" style={{ marginTop: 0, justifyContent: 'flex-start' }}>
+          <div className="modal__actions viol-summary-actions">
             <button
               className="btn btn-primary"
               type="button"
@@ -77,7 +82,15 @@ export function ViolationsSummaryDialog({
             >
               Копировать выбранные
             </button>
-            {toast && <span className="muted">{toast}</span>}
+            <button
+              className="btn btn-ghost viol-summary-toggle"
+              type="button"
+              title={allSelected ? 'Снять отметки со всех категорий' : 'Отметить все категории'}
+              onClick={toggleAll}
+            >
+              {allSelected ? 'Снять все' : 'Выбрать все'}
+            </button>
+            {toast && <span className="muted viol-summary-toast">{toast}</span>}
           </div>
 
           <div className="check-list" style={{ margin: '12px 0' }}>

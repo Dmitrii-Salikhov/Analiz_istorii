@@ -78,7 +78,7 @@ def export_emk_txt(
                 f.write(f"{row['КВС']} | {row['врач']} | {row['нарушение']}\n")
             f.write("\n")
         if _section_on(sections, "Сводка по врачам"):
-            f.write("СВОДКА ПО ВРАЧАМ (без учёта длительных госпитализаций)\n")
+            f.write("СВОДКА ПО ВРАЧАМ (без учёта длительных госпитализаций и справочных проверок)\n")
             for _, row in r.doctor_stats.iterrows():
                 f.write(f"{row['врач']}: {row['количество нарушений']} нарушений\n")
             f.write("\n")

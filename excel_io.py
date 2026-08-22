@@ -73,6 +73,7 @@ class ExcelLoadResult:
     header_row: int
     file_path: str
     mapping: MappingReport | None = None
+    emk_variant: str | None = None  # "discharged" | "current" for EMK loads
 
 
 def clean_column_name(col) -> str:
@@ -322,6 +323,50 @@ REPORT_KIND_LABELS: dict[str, str] = {
     "ops": "отчёт по операциям (вкладка «Операции»)",
 }
 
+EMK_VARIANT_LABELS: dict[str, str] = {
+    "discharged": "Выписанные",
+    "current": "Текущие пациенты",
+}
+
+
+def detect_emk_variant(file_path: str, *, max_scan_rows: int = 12) -> str:
+    """
+    «current» — отчёт по пациентам в стационаре сейчас;
+    «discharged» — суммарный отчёт по выписанным.
+    """
+    try:
+        xls = pd.ExcelFile(file_path)
+    except Exception:
+        return "discharged"
+    title_bits: list[str] = []
+    for sheet in xls.sheet_names[:3]:
+        try:
+            raw = pd.read_excel(
+                file_path, sheet_name=sheet, header=None, dtype=str, nrows=max_scan_rows
+            )
+        except Exception:
+            continue
+        for i in range(min(len(raw), max_scan_rows)):
+            text = _row_text(raw.iloc[i]).lower().replace("ё", "е")
+            title_bits.append(text)
+            if "текущ" in text:
+                return "current"
+    # Fallback: no IDS column + placeholder discharge dates often mark current reports
+    joined = " ".join(title_bits)
+    if "выпис" in joined and "текущ" not in joined:
+        return "discharged"
+    return "discharged"
+
+
+def emk_required_columns_for_variant(variant: str, base: Sequence[str] | None = None) -> list[str]:
+    from report_profiles import EMK_CURRENT_OPTIONAL_REQUIRED
+
+    cols = list(base or EMK_REQUIRED_COLUMNS)
+    if variant == "current":
+        return [c for c in cols if c not in EMK_CURRENT_OPTIONAL_REQUIRED]
+    return cols
+
+
 _REPORT_KIND_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "emk": tuple(DEFAULT_EMK_PROFILE["header_fragments"]),
     "ksg": tuple(DEFAULT_KSG_PROFILE["header_fragments"]),
@@ -437,14 +482,50 @@ def load_lor_excel(
     profile: Mapping[str, Any] | None = None,
     config: Mapping[str, Any] | None = None,
 ) -> ExcelLoadResult:
-    return _load_typed_excel(
+    from report_profiles import EMK_REQUIRED_COLUMNS, get_active_profile
+
+    variant = detect_emk_variant(file_path)
+    prof = dict(profile) if profile else (
+        get_active_profile(dict(config or {}), "emk")
+        if config is not None
+        else deepcopy_profile(DEFAULT_EMK_PROFILE)
+    )
+    base_required = list(prof.get("required_columns") or EMK_REQUIRED_COLUMNS)
+    prof = dict(prof)
+    prof["required_columns"] = emk_required_columns_for_variant(variant, base_required)
+    # Ensure aliases know about admission / movement columns
+    aliases = dict(prof.get("aliases") or {})
+    from report_profiles import _default_emk_aliases
+
+    defaults = _default_emk_aliases()
+    for key in (
+        "Дата и время поступления в указанном движении",
+        "№ движения пациента в рамках госпитализации",
+    ):
+        if key not in aliases and key in defaults:
+            aliases[key] = defaults[key]
+    # Soft-required columns still map if present
+    for key in EMK_REQUIRED_COLUMNS:
+        if key not in aliases and key in defaults:
+            aliases[key] = defaults[key]
+    prof["aliases"] = aliases
+
+    result = _load_typed_excel(
         file_path,
         expected_kind="emk",
         progress=progress,
-        profile=profile,
-        config=config,
+        profile=prof,
+        config=None,
         default_profile=DEFAULT_EMK_PROFILE,
         kind_key="emk",
+    )
+    return ExcelLoadResult(
+        dataframe=result.dataframe,
+        sheet_name=result.sheet_name,
+        header_row=result.header_row,
+        file_path=result.file_path,
+        mapping=result.mapping,
+        emk_variant=variant,
     )
 
 

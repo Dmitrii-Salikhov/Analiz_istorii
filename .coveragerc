@@ -1,0 +1,19 @@
+[run]
+branch = False
+source = .
+omit =
+    gui/*
+    bridge/*
+    desktop/*
+    tests/*
+    main.py
+    updater.py
+    lor_analyzer_tk.py
+    */site-packages/*
+    */.venv/*
+
+[report]
+precision = 2
+show_missing = True
+skip_empty = True
+fail_under = 91

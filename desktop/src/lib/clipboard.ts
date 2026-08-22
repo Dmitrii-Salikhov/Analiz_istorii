@@ -1,5 +1,26 @@
 /** Clipboard helpers for Electron renderer. */
 
+export function copySelectionFromDocument(): boolean {
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed) {
+    const text = sel.toString();
+    if (text.trim()) {
+      void copyText(text);
+      return true;
+    }
+  }
+  const el = document.activeElement;
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    if (start != null && end != null && start !== end) {
+      void copyText(el.value.slice(start, end));
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function copyText(text: string): Promise<void> {
   if (!text) return;
   if (navigator.clipboard?.writeText) {

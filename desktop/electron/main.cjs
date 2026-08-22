@@ -2,6 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain, shell, session } = require('electro
 const path = require('node:path');
 const fs = require('node:fs');
 const { PythonBridge } = require('./pythonBridge.cjs');
+const { bindApplicationMenu, syncMenuState } = require('./appMenu.cjs');
 const {
   approvePath,
   approveLoadPaths,
@@ -67,6 +68,12 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  try {
+    bindApplicationMenu(mainWindow, bridge.projectRoot());
+  } catch {
+    bindApplicationMenu(mainWindow, '');
+  }
 }
 
 function registerIpc() {
@@ -147,9 +154,17 @@ function registerIpc() {
     const safe = assertSafeExternalUrl(url);
     await shell.openExternal(safe);
   });
+
+  ipcMain.handle('menu:sync', async (_e, state) => {
+    syncMenuState(state || {});
+    return { ok: true };
+  });
 }
 
 app.whenReady().then(async () => {
+  if (process.platform === 'darwin') {
+    app.setName('Анализ работы отделения');
+  }
   applyCsp();
   registerIpc();
   createWindow();

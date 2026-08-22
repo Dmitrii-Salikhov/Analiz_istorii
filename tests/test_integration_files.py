@@ -35,6 +35,11 @@ def test_real_lor_excel_pipeline():
     filtered = filter_by_department(loaded.dataframe, deps[0])
     result = analyze_lor(filtered)
     assert result.total_patients >= 0
+    matched = {m["canonical"] for m in (loaded.mapping.matched if loaded.mapping else [])}
+    assert (
+        'Наличие ЭМД "Выписной эпикриз"' in loaded.dataframe.columns
+        or 'Наличие ЭМД "Выписной эпикриз"' in matched
+    )
 
 
 @pytest.mark.skipif(

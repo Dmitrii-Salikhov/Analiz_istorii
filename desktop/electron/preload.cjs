@@ -17,4 +17,14 @@ contextBridge.exposeInMainWorld('analiz', {
       return null;
     }
   },
+  syncMenuState: (state) => ipcRenderer.invoke('menu:sync', state || {}),
+  onMenuAction: (callback) => {
+    const handler = (_event, payload) => {
+      if (payload && typeof payload.action === 'string') {
+        callback(payload);
+      }
+    };
+    ipcRenderer.on('menu:action', handler);
+    return () => ipcRenderer.removeListener('menu:action', handler);
+  },
 });

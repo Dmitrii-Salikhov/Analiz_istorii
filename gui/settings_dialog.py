@@ -6,7 +6,7 @@ from tkinter import messagebox
 
 import ttkbootstrap as ttkb
 
-from config_store import save_config
+from config_store import DEFAULT_CONFIG, save_config
 from gui.ui_theme import (
     DARK_THEME,
     LIGHT_THEME,
@@ -132,6 +132,33 @@ class SettingsDialog(tk.Toplevel):
         )
         row += 1
 
+        ttkb.Label(body, text="ЭМК — справочные проверки:", font=("Calibri", 11, "bold")).grid(
+            row=row, column=0, sticky="w", pady=(0, 4)
+        )
+        row += 1
+        info_defaults = DEFAULT_CONFIG.get("emk_info_checks") or {}
+        info_raw = settings.get("emk_info_checks") if isinstance(settings.get("emk_info_checks"), dict) else {}
+        self.info_check_vars: dict[str, tk.BooleanVar] = {}
+        info_labels = {
+            "lab": "Лабораторные исследования",
+            "instr": "Инструментальные исследования",
+            "cons": "Консультативные услуги",
+            "rean": "Реанимационные дневники",
+            "emd": "ЭМД выписной эпикриз в хранилище",
+        }
+        info_frame = ttkb.Frame(body)
+        info_frame.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        for key, label in info_labels.items():
+            var = tk.BooleanVar(value=bool(info_raw.get(key, info_defaults.get(key, True))))
+            self.info_check_vars[key] = var
+            ttkb.Checkbutton(
+                info_frame,
+                text=label,
+                variable=var,
+                bootstyle="round-toggle",
+            ).pack(anchor="w", pady=1)
+        row += 1
+
         ttkb.Label(body, text="Предпочитаемое отделение (ЛОР):", font=("Calibri", 11, "bold")).grid(
             row=row, column=0, sticky="w", pady=(0, 4)
         )
@@ -215,6 +242,9 @@ class SettingsDialog(tk.Toplevel):
                 "kslp_operations_codes": codes,
                 "kslp_rules": kslp_rules,
                 "preferred_department": self.dept_var.get().strip(),
+                "emk_info_checks": {
+                    key: bool(var.get()) for key, var in self.info_check_vars.items()
+                },
                 "github_repo": self.repo_var.get().strip(),
                 "check_updates_on_start": self.check_updates_var.get(),
             }

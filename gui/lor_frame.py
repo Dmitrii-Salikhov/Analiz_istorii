@@ -44,11 +44,14 @@ from gui.ui_theme import (
 )
 from gui.widgets import ScrollableFrame, enable_file_drop, make_filtered_tree, run_with_progress
 from lor_analysis import (
+    COUNT_DEFICIT_TYPES,
+    EMD_EPICRISIS_TYPE,
     LorAnalysisResult,
     analyze_lor,
     emk_report_basename,
     filter_by_department,
     format_doctor_name,
+    violation_category_title,
     violation_share_table,
 )
 
@@ -473,11 +476,15 @@ class LorReportFrame(ttkb.Frame):
             worst_cnt = r.doctor_stats["количество нарушений"].max()
             note_text.insert(
                 tk.END,
-                f"Больше всего нарушений (без учёта длительных госпитализаций) у врача: "
-                f"{worst} – {worst_cnt} нарушений.\n",
+                f"Больше всего нарушений (без учёта длительных госпитализаций и справочных проверок) "
+                f"у врача: {worst} – {worst_cnt} нарушений.\n",
             )
         else:
-            note_text.insert(tk.END, "Нарушений (кроме длительных госпитализаций) нет – отличная работа!\n")
+            note_text.insert(
+                tk.END,
+                "Нарушений (кроме длительных госпитализаций и справочных проверок) нет – "
+                "отличная работа!\n",
+            )
         if not r.ids_stats.empty:
             ids_count = len(r.violations_df[r.violations_df["тип_нарушения"] == "ИДС"])
             note_text.insert(tk.END, f"Основная проблема: отсутствие ИДС – {ids_count} случаев.\n")
@@ -495,7 +502,8 @@ class LorReportFrame(ttkb.Frame):
             )
         note_text.insert(
             tk.END,
-            "Рекомендации: усилить контроль за оформлением ИДС, дневников и эпикризов.",
+            "Рекомендации: усилить контроль за оформлением ИДС, дневников, "
+            "исследований, консультаций и эпикризов.",
         )
         note_text.configure(state=tk.DISABLED)
 
@@ -621,6 +629,11 @@ class LorReportFrame(ttkb.Frame):
             "МКСБ",
             "Лекарственные назначения",
             "Дневниковые записи",
+            "Лабораторные исследования",
+            "Инструментальные исследования",
+            "Консультативные услуги",
+            "Реанимационные дневники",
+            "ЭМД выписной эпикриз",
             "ИДС",
             "Протоколы операций",
         }
@@ -651,22 +664,11 @@ class LorReportFrame(ttkb.Frame):
         container = ttkb.Frame(self.viol_all_tab)
         container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        category_info = {
-            "МКСБ": {"title": "МКСБ (Не подписана)"},
-            "Протоколы операций": {"title": "Протоколы операций (несоответствие)"},
-            "Эпикриз": {"title": "Эпикризы (не оформлены)"},
-            "Первичный осмотр": {"title": "Первичный осмотр (не оформлен)"},
-            "Лекарственные назначения": {"title": "Лекарственные назначения (отсутствуют)"},
-            "Дневниковые записи": {"title": "Дневниковые записи (недостаточно)"},
-            "ИДС": {"title": "ИДС (отсутствует)"},
-            "Длительная госпитализация": {"title": "Длительная госпитализация (>7 дней)"},
-        }
-
         grouped = r.violations_df.groupby("тип_нарушения")
         all_sections: list[tuple[str, str]] = []
         for vtype, group in grouped:
-            info = category_info.get(vtype, {"title": vtype})
-            lines = [f"{info['title']}:"]
+            title = violation_category_title(str(vtype))
+            lines = [f"{title}:"]
             if vtype == "Протоколы операций":
                 for _, row in group.iterrows():
                     doctor_short = format_doctor_name(row["врач"])
@@ -678,7 +680,7 @@ class LorReportFrame(ttkb.Frame):
                         )
                     else:
                         lines.append(f"• {row['КВС']} ({doctor_short}): {row['нарушение']}")
-            elif vtype == "Дневниковые записи":
+            elif vtype in COUNT_DEFICIT_TYPES:
                 for _, row in group.iterrows():
                     doctor_short = format_doctor_name(row["врач"])
                     match = re.search(r"нужно (\d+), оформлено (\d+)", row["нарушение"])
@@ -700,12 +702,16 @@ class LorReportFrame(ttkb.Frame):
                     match = re.search(r"\((\d+)\)", str(row["нарушение"]))
                     days = match.group(1) if match else "?"
                     lines.append(f"• {row['КВС']} ({doctor_short}) — {days} дн.")
+            elif vtype == EMD_EPICRISIS_TYPE:
+                for _, row in group.iterrows():
+                    doctor_short = format_doctor_name(row["врач"])
+                    lines.append(f"• {row['КВС']} ({doctor_short}): {row['нарушение']}")
             else:
                 for _, row in group.iterrows():
                     doctor_short = format_doctor_name(row["врач"])
                     lines.append(f"• {row['КВС']} ({doctor_short})")
             lines.append("-" * 50)
-            all_sections.append((info["title"], "\n".join(lines)))
+            all_sections.append((title, "\n".join(lines)))
 
         top_frame = ttkb.Frame(container)
         top_frame.pack(fill=tk.X, pady=5)
@@ -909,7 +915,7 @@ class LorReportFrame(ttkb.Frame):
         headings = {
             "№": "№",
             "Врач": "Врач",
-            "Количество нарушений": "Количество нарушений (без длительных госпитализаций)",
+            "Количество нарушений": "Количество нарушений (без длит. госп. и справочных)",
         }
         data = [
             (i, row["врач"], row["количество нарушений"])
@@ -976,7 +982,7 @@ class LorReportFrame(ttkb.Frame):
                     f.write(f"{row['КВС']} | {row['врач']} | {row['нарушение']}\n")
                 f.write("\n")
             if self.export_sections["Сводка по врачам"].get():
-                f.write("СВОДКА ПО ВРАЧАМ (без учёта длительных госпитализаций)\n")
+                f.write("СВОДКА ПО ВРАЧАМ (без учёта длительных госпитализаций и справочных проверок)\n")
                 for _, row in r.doctor_stats.iterrows():
                     f.write(f"{row['врач']}: {row['количество нарушений']} нарушений\n")
                 f.write("\n")

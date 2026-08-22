@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const ALLOWED_RPC = new Set([
   'ping',
   'app.version',
+  'app.changelog',
   'config.get',
   'config.set',
   'ref.operations',

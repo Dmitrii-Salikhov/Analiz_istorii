@@ -42,3 +42,6 @@ def test_short_month_label_from_name():
 
 def test_chart_color_ids():
     assert chart_color_for_violation("ИДС").startswith("#")
+    assert chart_color_for_violation("Лабораторные исследования") == "#1abc9c"
+    assert chart_color_for_violation("Реанимационные дневники") == "#d35400"
+    assert chart_color_for_violation("ЭМД выписной эпикриз") == "#2c7a7b"

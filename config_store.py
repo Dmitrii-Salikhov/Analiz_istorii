@@ -57,6 +57,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "section_doctors": True,
         "section_skp": True,
     },
+    "emk_info_checks": {
+        "lab": True,
+        "instr": True,
+        "cons": True,
+        "rean": True,
+        "emd": True,
+    },
     "ksg_display": {
         "kpi_patients": True,
         "kpi_sum": True,
@@ -79,6 +86,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "kz": True,
             "kslp": True,
         },
+        "emk_scope_mode": "single",
+        "emk_summary_mode": "all",
+        "emk_selected_departments": [],
     },
     "report_profiles": None,  # filled below via normalize — placeholder replaced
     "recent_emk": [],
@@ -122,10 +132,11 @@ def load_config() -> dict[str, Any]:
     cfg.setdefault("long_op_hours", 4)
     cfg.setdefault("known_departments", list(DEFAULT_CONFIG["known_departments"]))
     cfg.setdefault("emk_display", deepcopy(DEFAULT_CONFIG["emk_display"]))
+    cfg.setdefault("emk_info_checks", deepcopy(DEFAULT_CONFIG["emk_info_checks"]))
     cfg.setdefault("ksg_display", deepcopy(DEFAULT_CONFIG["ksg_display"]))
     cfg.setdefault("ui_prefs", deepcopy(DEFAULT_CONFIG["ui_prefs"]))
     # merge nested display keys so old configs get new toggles
-    for key in ("emk_display", "ksg_display"):
+    for key in ("emk_display", "ksg_display", "emk_info_checks"):
         base = deepcopy(DEFAULT_CONFIG[key])
         nested = cfg.get(key) if isinstance(cfg.get(key), dict) else {}
         base.update(nested or {})

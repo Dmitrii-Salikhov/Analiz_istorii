@@ -382,6 +382,47 @@ table.data tr:hover td {
   white-space: pre-wrap;
 }
 
+.emk-current-info {
+  white-space: normal;
+}
+
+.emk-current-info__title {
+  font-weight: 650;
+  margin-bottom: 6px;
+}
+
+.emk-current-info ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.emk-current-info li {
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+
+.emk-asof-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.emk-asof-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.emk-asof-controls input[type='date'] {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 5px 8px;
+}
+
 .muted {
   color: var(--text-muted);
 }
@@ -413,6 +454,21 @@ table.data tr:hover td {
   border-radius: var(--radius);
   background: var(--bg-input);
   color: var(--text);
+}
+
+.viol-summary-actions {
+  margin-top: 0;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.viol-summary-toggle {
+  margin-left: auto;
+}
+
+.viol-summary-toast {
+  flex-basis: 100%;
 }
 
 .compare-chart-toggles {
@@ -479,4 +535,34 @@ table.data tr:hover td {
   font-size: 18px;
   font-weight: 650;
   pointer-events: none;
+}
+
+.about-body p {
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+
+.changelog {
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.changelog__entry {
+  margin-bottom: 18px;
+}
+
+.changelog__entry h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.changelog__entry ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.changelog__entry li {
+  margin-bottom: 6px;
+  line-height: 1.4;
 }
