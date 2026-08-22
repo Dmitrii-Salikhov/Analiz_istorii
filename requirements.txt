@@ -6,4 +6,5 @@ pillow>=10.0
 ttkbootstrap>=1.10
 certifi>=2024.0
 pytest>=8.0
+pytest-cov>=5.0
 tkinterdnd2>=0.3.0
