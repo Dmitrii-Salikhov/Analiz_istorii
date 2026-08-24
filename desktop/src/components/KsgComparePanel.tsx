@@ -159,7 +159,7 @@ export function KsgComparePanel({
   };
 
   const totalsCellClass = (
-    row: Record<string, unknown>,
+    _row: Record<string, unknown>,
     col: string,
     rowIndex: number,
   ): string | undefined => {

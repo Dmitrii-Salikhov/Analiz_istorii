@@ -89,6 +89,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "emk_scope_mode": "single",
         "emk_summary_mode": "all",
         "emk_selected_departments": [],
+        "ops_scope_mode": "single",
+        "ops_summary_mode": "all",
+        "ops_selected_departments": [],
     },
     "report_profiles": None,  # filled below via normalize — placeholder replaced
     "recent_emk": [],

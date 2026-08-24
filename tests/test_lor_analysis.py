@@ -598,6 +598,106 @@ def test_current_patients_unique_kvs_and_rules():
     assert list(primary["КВС"]) == ["K1"]
 
 
+def test_snils_note_on_document_violations():
+    from lor_analysis import (
+        SNILS_NOTE,
+        cases_coverage_by_snils,
+        violation_share_table_by_snils,
+    )
+
+    df = pd.DataFrame(
+        [
+            _sample_row(
+                **{
+                    "Номер КВС": "S1",
+                    "Наличие СНИЛС": "ДА",
+                    "Наличие заполненного первичного осмотра в указанном движении": "НЕТ",
+                    "Наличие оформленного эпикриза в указанном движении": "НЕТ",
+                    "Статус МКСБ": "Не подписана",
+                }
+            ),
+            _sample_row(
+                **{
+                    "Номер КВС": "S2",
+                    "Наличие СНИЛС": "НЕТ",
+                    "Наличие заполненного первичного осмотра в указанном движении": "НЕТ",
+                    "Наличие оформленного эпикриза в указанном движении": "НЕТ",
+                    "Статус МКСБ": "Не подписана",
+                    "Хир. активность (количество)": "2",
+                    "Хир. активность (протоколы)": "1",
+                }
+            ),
+            _sample_row(
+                **{
+                    "Номер КВС": "S3",
+                    "Наличие СНИЛС": "НЕТ",
+                    "Другие связанные документы": "нет",
+                }
+            ),
+        ]
+    )
+    result = analyze_lor(df)
+    assert list(result.violations_df.columns[:2]) == ["КВС", "пометка"]
+    epic = result.violations_df[result.violations_df["тип_нарушения"] == "Эпикриз"]
+    notes = dict(zip(epic["КВС"].astype(str), epic["пометка"].astype(str)))
+    assert notes["S1"] == ""
+    assert notes["S2"] == SNILS_NOTE
+    ops = result.violations_df[result.violations_df["тип_нарушения"] == "Протоколы операций"]
+    assert list(ops["пометка"]) == [SNILS_NOTE]
+    ids = result.violations_df[result.violations_df["тип_нарушения"] == "ИДС"]
+    # ИДС не помечаем
+    assert all(str(x) == "" for x in ids["пометка"])
+
+    share = violation_share_table_by_snils(result.violations_df)
+    assert "С СНИЛС" in share.columns and "Без СНИЛС" in share.columns
+    cov = cases_coverage_by_snils(result.df, result.violations_df)
+    assert cov is not None
+    assert cov["with_violations_no_snils"] >= 1
+    assert cov["with_violations_snils"] >= 1
+
+
+def test_snils_absent_column_no_notes():
+    from lor_analysis import cases_coverage_by_snils
+
+    df = pd.DataFrame(
+        [
+            _sample_row(
+                **{
+                    "Номер КВС": "X1",
+                    "Наличие оформленного эпикриза в указанном движении": "НЕТ",
+                }
+            ),
+        ]
+    )
+    result = analyze_lor(df)
+    epic = result.violations_df[result.violations_df["тип_нарушения"] == "Эпикриз"]
+    assert list(epic["пометка"]) == [""]
+    assert cases_coverage_by_snils(result.df, result.violations_df) is None
+
+
+def test_summary_bullet_includes_short_snils_note():
+    from lor_analysis import SNILS_NOTE, format_violations_summary_sections
+
+    df = pd.DataFrame(
+        [
+            _sample_row(
+                **{
+                    "Номер КВС": "26/38758",
+                    "Наличие СНИЛС": "НЕТ",
+                    "Наличие заполненного первичного осмотра в указанном движении": "НЕТ",
+                    "Лечащий врач": "Кагерманов Абдула Хизриевна",
+                }
+            ),
+        ]
+    )
+    result = analyze_lor(df)
+    assert SNILS_NOTE in set(result.violations_df["пометка"])
+    sections = format_violations_summary_sections(result.violations_df)
+    primary = next(s for s in sections if "Первичн" in s["title"] or s["id"] == "Первичный осмотр")
+    assert "26/38758 - нет СНИЛС" in primary["text"]
+    assert "Врач:" in primary["text"]
+
+
 def test_collapse_without_movement_and_empty_analyze():
     from datetime import date
 

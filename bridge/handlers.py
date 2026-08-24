@@ -37,12 +37,16 @@ from ksg_analysis import (
 )
 from lor_analysis import (
     analyze_lor,
+    cases_coverage_by_snils,
+    cases_coverage_lists,
     emk_report_basename,
     filter_by_department,
     filter_by_departments,
     format_department_scope_label,
     format_violations_summary_sections,
+    snils_column_available,
     violation_share_table,
+    violation_share_table_by_snils,
     EMK_VARIANT_CURRENT,
     EMK_VARIANT_DISCHARGED,
 )
@@ -75,6 +79,8 @@ _OPS: dict[str, Any] = {
     "analysis": None,
     "departments": [],
     "department": "",
+    "scope": "single",
+    "departments_selected": [],
 }
 
 
@@ -129,6 +135,12 @@ def _df_records(df: pd.DataFrame | None, limit: int | None = None) -> list[dict[
     return [_json_safe(row) for row in records]
 
 
+def _case_list_records(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    return _df_records(pd.DataFrame(rows), limit=5000)
+
+
 def _ensure_ksg_reference() -> tuple[dict, str]:
     if _KSG["reference"] is None:
         ref, status = load_reference()
@@ -158,6 +170,7 @@ def _emk_payload(
     as_of: date | None = None,
 ) -> dict[str, Any]:
     share = violation_share_table(result.violations_df)
+    share_snils = violation_share_table_by_snils(result.violations_df)
     viol_df = result.violations_df
     if viol_df is not None and not viol_df.empty and "КВС" in viol_df.columns:
         with_viol = int(viol_df["КВС"].nunique())
@@ -165,7 +178,25 @@ def _emk_payload(
         with_viol = 0
     total = int(result.total_patients or 0)
     without_viol = max(0, total - with_viol)
+    snils_ok = snils_column_available(result.df)
+    coverage_snils = cases_coverage_by_snils(result.df, viol_df) if snils_ok else None
+    coverage_lists = cases_coverage_lists(result.df, viol_df)
+    # В UI-таблице нарушений служебный флаг есть_СНИЛС не показываем
+    viol_for_ui = viol_df
+    if viol_df is not None and not viol_df.empty and "есть_СНИЛС" in viol_df.columns:
+        viol_for_ui = viol_df.drop(columns=["есть_СНИЛС"])
     from excel_io import EMK_VARIANT_LABELS
+
+    coverage_counts = None
+    coverage_snils_lists = None
+    if coverage_snils:
+        coverage_snils_lists = coverage_snils.get("lists")
+        coverage_counts = {
+            "with_violations_snils": coverage_snils["with_violations_snils"],
+            "with_violations_no_snils": coverage_snils["with_violations_no_snils"],
+            "without_violations_snils": coverage_snils["without_violations_snils"],
+            "without_violations_no_snils": coverage_snils["without_violations_no_snils"],
+        }
 
     return {
         "department": department_label,
@@ -193,8 +224,10 @@ def _emk_payload(
         "skp_count": result.skp_count,
         "skp_days_0": result.skp_days_0,
         "skp_days_1": result.skp_days_1,
+        "snils_available": snils_ok,
         "violation_share": _df_records(share),
-        "violations": _df_records(result.violations_df, limit=5000),
+        "violation_share_by_snils": _df_records(share_snils),
+        "violations": _df_records(viol_for_ui, limit=5000),
         "doctor_stats": _df_records(result.doctor_stats),
         "ids_stats": _df_records(result.ids_stats),
         "long_stay": _df_records(result.long_stay, limit=2000),
@@ -203,6 +236,23 @@ def _emk_payload(
         "violations_total": int(len(result.violations_df)) if result.violations_df is not None else 0,
         "cases_with_violations": with_viol,
         "cases_without_violations": without_viol,
+        "cases_coverage_by_snils": coverage_counts,
+        "cases_coverage_lists": {
+            "with_violations": _case_list_records(coverage_lists.get("with_violations")),
+            "without_violations": _case_list_records(coverage_lists.get("without_violations")),
+            "with_violations_snils": _case_list_records(
+                (coverage_snils_lists or {}).get("with_violations_snils")
+            ),
+            "with_violations_no_snils": _case_list_records(
+                (coverage_snils_lists or {}).get("with_violations_no_snils")
+            ),
+            "without_violations_snils": _case_list_records(
+                (coverage_snils_lists or {}).get("without_violations_snils")
+            ),
+            "without_violations_no_snils": _case_list_records(
+                (coverage_snils_lists or {}).get("without_violations_no_snils")
+            ),
+        },
     }
 
 
@@ -681,13 +731,31 @@ def _ops_payload(result) -> dict[str, Any]:
         "path": _OPS.get("path"),
         "department": result.department or _OPS.get("department") or "",
         "departments": list(_OPS.get("departments") or []),
+        "scope": getattr(result, "scope", None) or _OPS.get("scope") or "single",
+        "departments_in_scope": list(getattr(result, "departments_in_scope", None) or []),
+        "departments_total": int(getattr(result, "departments_total", 0) or 0),
         "total_ops": result.total_ops,
         "long_op_hours": result.long_op_hours,
         "long_count": result.long_count,
         "missing_table_count": result.missing_table_count,
         "long_ops": _json_safe(result.long_ops),
         "missing_table": _json_safe(result.missing_table),
+        "violations_summary": _json_safe(
+            getattr(result, "violations_summary", None) or []
+        ),
     }
+
+
+def _parse_ops_scope(params: dict[str, Any]) -> tuple[str, str, list[str]]:
+    scope = str(params.get("scope") or "single").strip().lower()
+    if scope not in ("single", "multi", "all"):
+        scope = "single"
+    department = str(params.get("department") or "").strip()
+    raw_deps = params.get("departments")
+    departments: list[str] = []
+    if isinstance(raw_deps, list):
+        departments = [str(d).strip() for d in raw_deps if str(d).strip()]
+    return scope, department, departments
 
 
 def ops_load(params: dict[str, Any]) -> dict[str, Any]:
@@ -706,12 +774,20 @@ def ops_load(params: dict[str, Any]) -> dict[str, Any]:
         if d and d not in known:
             known.append(d)
     cfg["known_departments"] = known
-    result = analyze_ops(df, cfg, file_name=path.name, department=preferred or None)
+    result = analyze_ops(
+        df,
+        cfg,
+        file_name=path.name,
+        department=preferred or None,
+        scope="single",
+    )
     _OPS["path"] = str(path)
     _OPS["file_name"] = path.name
     _OPS["df"] = df
     _OPS["departments"] = departments
     _OPS["department"] = preferred
+    _OPS["scope"] = "single"
+    _OPS["departments_selected"] = []
     _OPS["analysis"] = result
     push_recent_file(cfg, "recent_ops", str(path))
     save_config(cfg)
@@ -734,16 +810,30 @@ def ops_analyze(params: dict[str, Any]) -> dict[str, Any]:
     if _OPS.get("df") is None:
         raise RuntimeError("Сначала загрузите файл операций")
     cfg = load_config()
-    dept = str(params.get("department") or "").strip()
-    if not dept:
-        dept = str(_OPS.get("department") or "").strip()
-    if dept:
-        _OPS["department"] = dept
+    scope, department, departments = _parse_ops_scope(params)
+    if scope == "single":
+        if not department:
+            department = str(_OPS.get("department") or "").strip()
+        if department:
+            _OPS["department"] = department
+        _OPS["scope"] = "single"
+        _OPS["departments_selected"] = []
+    elif scope == "multi":
+        if not departments:
+            raise ValueError("Выберите хотя бы одно отделение")
+        _OPS["scope"] = "multi"
+        _OPS["departments_selected"] = departments
+    else:
+        _OPS["scope"] = "all"
+        _OPS["departments_selected"] = list(_OPS.get("departments") or [])
+
     result = analyze_ops(
         _OPS["df"],
         cfg,
         file_name=str(_OPS.get("file_name") or ""),
-        department=dept or None,
+        department=department or None,
+        departments=departments if scope == "multi" else None,
+        scope=scope,
     )
     _OPS["analysis"] = result
     return _ops_payload(result)

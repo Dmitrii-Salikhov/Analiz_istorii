@@ -305,3 +305,70 @@ def test_long_ops_date_mismatch_and_dedupe():
     assert "различаются" in long[0]["Причина"]
     miss = find_missing_or_table(ops)
     assert len(miss) == 1
+
+
+def test_analyze_ops_scope_all_and_multi():
+    raw = pd.DataFrame(
+        [
+            {
+                "Дата начала операции": "01.01.2026",
+                "Время начала операции": "08:00",
+                "Дата окончания операции": "01.01.2026",
+                "Время окончания операции": "13:00",
+                "№ истории": "1",
+                "Фамилия, имя, отчество пациента": "A",
+                "Опер.стол": "1",
+                "Услуга": "A16.08.001",
+                "Операционная бригада": "Хирург Иванов И.И.",
+                "Отделение госпитализации": "ЛОР",
+            },
+            {
+                "Дата начала операции": "01.01.2026",
+                "Время начала операции": "09:00",
+                "Дата окончания операции": "01.01.2026",
+                "Время окончания операции": "10:00",
+                "№ истории": "2",
+                "Фамилия, имя, отчество пациента": "B",
+                "Опер.стол": "",
+                "Услуга": "A16.08.002",
+                "Операционная бригада": "Хирург Петров П.П.",
+                "Отделение госпитализации": "Хирургия",
+            },
+            {
+                "Дата начала операции": "01.01.2026",
+                "Время начала операции": "09:00",
+                "Дата окончания операции": "01.01.2026",
+                "Время окончания операции": "14:30",
+                "№ истории": "3",
+                "Фамилия, имя, отчество пациента": "C",
+                "Опер.стол": "2",
+                "Услуга": "A16.08.003",
+                "Операционная бригада": "Хирург Сидоров С.С.",
+                "Отделение госпитализации": "Хирургия",
+            },
+        ]
+    )
+    all_res = analyze_ops(raw, {"long_op_hours": 4}, scope="all")
+    assert all_res.scope == "all"
+    assert all_res.total_ops == 3
+    assert all_res.long_count == 2
+    assert all_res.missing_table_count == 1
+    assert all_res.violations_summary[0]["Количество"] == 2
+    assert all_res.violations_summary[1]["Количество"] == 1
+
+    multi = analyze_ops(
+        raw,
+        {"long_op_hours": 4},
+        scope="multi",
+        departments=["Хирургия"],
+    )
+    assert multi.scope == "multi"
+    assert multi.total_ops == 2
+    assert multi.long_count == 1
+    assert multi.missing_table_count == 1
+    assert "Хирургия" in multi.department
+
+    single = analyze_ops(raw, {"long_op_hours": 4}, department="ЛОР", scope="single")
+    assert single.total_ops == 1
+    assert single.long_count == 1
+    assert single.missing_table_count == 0

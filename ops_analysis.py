@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import pandas as pd
 
@@ -216,6 +216,53 @@ def list_ops_departments(df: pd.DataFrame) -> list[str]:
     return sorted(values, key=lambda s: s.lower())
 
 
+def filter_ops_by_departments(ops: pd.DataFrame, departments: Sequence[str]) -> pd.DataFrame:
+    """Строгое совпадение по колонке «Отделение» в нормализованном журнале."""
+    names = {str(d).strip() for d in departments if str(d).strip()}
+    if not names or ops is None or getattr(ops, "empty", True) or "Отделение" not in ops.columns:
+        return ops.iloc[0:0].copy() if ops is not None else pd.DataFrame()
+    col = ops["Отделение"].astype(str).str.strip()
+    return ops.loc[col.isin(names)].copy()
+
+
+def format_ops_department_scope_label(
+    scope: str,
+    *,
+    department: str = "",
+    departments: Sequence[str] | None = None,
+    departments_total: int = 0,
+) -> str:
+    if scope == "all":
+        return f"все отделения ({departments_total})"
+    if scope == "multi":
+        deps = [str(d).strip() for d in (departments or []) if str(d).strip()]
+        if not deps:
+            return "выбранные отделения"
+        if len(deps) <= 3:
+            return "; ".join(deps)
+        return f"{len(deps)} отделений из {departments_total}"
+    return department.strip()
+
+
+def ops_violations_summary(
+    *,
+    long_count: int,
+    missing_table_count: int,
+    long_op_hours: float,
+) -> list[dict[str, Any]]:
+    """Сводка количеств по типам нарушений (для мульти-отделения)."""
+    return [
+        {
+            "Тип нарушения": f"Длительные (>{float(long_op_hours):g} ч)",
+            "Количество": int(long_count),
+        },
+        {
+            "Тип нарушения": "Без опер.стола",
+            "Количество": int(missing_table_count),
+        },
+    ]
+
+
 def _base_row(r: pd.Series, *, reason: str, hours: Any = None) -> dict[str, Any]:
     return {
         "КВС": _fmt_kvs(r.get("КВС")),
@@ -302,10 +349,14 @@ def find_missing_or_table(ops: pd.DataFrame) -> list[dict[str, Any]]:
 class OpsAnalysisResult:
     file_name: str = ""
     department: str = ""
+    scope: str = "single"
+    departments_in_scope: list[str] = field(default_factory=list)
+    departments_total: int = 0
     total_ops: int = 0
     long_op_hours: float = DEFAULT_LONG_OP_HOURS
     long_ops: list[dict[str, Any]] = field(default_factory=list)
     missing_table: list[dict[str, Any]] = field(default_factory=list)
+    violations_summary: list[dict[str, Any]] = field(default_factory=list)
     ops_df: pd.DataFrame | None = None
 
     @property
@@ -323,6 +374,8 @@ def analyze_ops(
     *,
     file_name: str = "",
     department: str | None = None,
+    departments: Sequence[str] | None = None,
+    scope: str = "single",
 ) -> OpsAnalysisResult:
     thr = long_op_hours_from_config(config)
     ops = normalize_ops_df(df)
@@ -330,17 +383,65 @@ def analyze_ops(
     if not ops.empty:
         mask = ops["КВС"].astype(str).str.strip().ne("") | ops["Услуга"].astype(str).str.strip().ne("")
         ops = ops.loc[mask].copy()
-    dept = (department or "").strip()
-    if dept and not ops.empty and "Отделение" in ops.columns:
-        ops = ops.loc[ops["Отделение"].astype(str).str.strip() == dept].copy()
+
+    all_depts = (
+        sorted(
+            {
+                str(x).strip()
+                for x in (ops["Отделение"].tolist() if "Отделение" in ops.columns else [])
+                if str(x).strip()
+            },
+            key=lambda s: s.lower(),
+        )
+        if not ops.empty
+        else []
+    )
+    scope_norm = str(scope or "single").strip().lower()
+    if scope_norm not in ("single", "multi", "all"):
+        scope_norm = "single"
+
+    active: list[str] = []
+    if scope_norm == "all":
+        active = list(all_depts)
+        label = format_ops_department_scope_label(
+            "all", departments_total=len(all_depts)
+        )
+    elif scope_norm == "multi":
+        deps = [str(d).strip() for d in (departments or []) if str(d).strip()]
+        if not deps:
+            raise ValueError("Выберите хотя бы одно отделение")
+        ops = filter_ops_by_departments(ops, deps)
+        if ops.empty:
+            raise ValueError("Нет данных по выбранным отделениям")
+        active = deps
+        label = format_ops_department_scope_label(
+            "multi",
+            departments=deps,
+            departments_total=len(all_depts),
+        )
+    else:
+        dept = (department or "").strip()
+        if dept and not ops.empty and "Отделение" in ops.columns:
+            ops = ops.loc[ops["Отделение"].astype(str).str.strip() == dept].copy()
+        active = [dept] if dept else []
+        label = dept
+
     long_ops = find_long_operations(ops, max_hours=thr)
     missing = find_missing_or_table(ops)
     return OpsAnalysisResult(
         file_name=file_name,
-        department=dept,
+        department=label,
+        scope=scope_norm,
+        departments_in_scope=active,
+        departments_total=len(all_depts),
         total_ops=int(len(ops)),
         long_op_hours=thr,
         long_ops=long_ops,
         missing_table=missing,
+        violations_summary=ops_violations_summary(
+            long_count=len(long_ops),
+            missing_table_count=len(missing),
+            long_op_hours=thr,
+        ),
         ops_df=ops,
     )

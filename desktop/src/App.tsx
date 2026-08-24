@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { BarChart } from './components/BarChart';
+import { BarChart, type BarGroup, type BarItem } from './components/BarChart';
 import { DataTable } from './components/DataTable';
 import { ExportDialog } from './components/ExportDialog';
 import { SettingsDialog, type AppConfig } from './components/SettingsDialog';
@@ -14,7 +14,11 @@ import {
   ViolationsSummaryDialog,
   type ViolationSection,
 } from './components/ViolationsSummaryDialog';
-import { copyText, copySelectionFromDocument, opsRowsToCompactCopy } from './lib/clipboard';
+import {
+  ViolationTypeDialog,
+  type ViolationTypeRow,
+} from './components/ViolationTypeDialog';
+import { copyText, copySelectionFromDocument, formatShortPersonName, opsRowsToCompactCopy } from './lib/clipboard';
 import { Modal } from './components/Modal';
 import {
   EmkDepartmentScope,
@@ -37,19 +41,23 @@ type OpsIssueRow = {
   Отделение?: string;
 };
 
+type EmkScope = 'single' | 'multi' | 'all';
+
 type OpsAnalysis = {
   file_name?: string;
   department?: string;
   departments?: string[];
+  scope?: EmkScope;
+  departments_in_scope?: string[];
+  departments_total?: number;
   total_ops: number;
   long_op_hours: number;
   long_count: number;
   missing_table_count: number;
   long_ops: OpsIssueRow[];
   missing_table: OpsIssueRow[];
+  violations_summary?: Record<string, unknown>[];
 };
-
-type EmkScope = 'single' | 'multi' | 'all';
 
 type EmkAnalysis = {
   department: string;
@@ -71,6 +79,7 @@ type EmkAnalysis = {
   skp_days_0: number;
   skp_days_1: number;
   violation_share: Record<string, unknown>[];
+  violation_share_by_snils?: Record<string, unknown>[];
   violations: Record<string, unknown>[];
   doctor_stats: Record<string, unknown>[];
   ids_stats: Record<string, unknown>[];
@@ -80,6 +89,21 @@ type EmkAnalysis = {
   violations_total: number;
   cases_with_violations?: number;
   cases_without_violations?: number;
+  snils_available?: boolean;
+  cases_coverage_by_snils?: {
+    with_violations_snils: number;
+    with_violations_no_snils: number;
+    without_violations_snils: number;
+    without_violations_no_snils: number;
+  } | null;
+  cases_coverage_lists?: {
+    with_violations?: Record<string, unknown>[];
+    without_violations?: Record<string, unknown>[];
+    with_violations_snils?: Record<string, unknown>[];
+    with_violations_no_snils?: Record<string, unknown>[];
+    without_violations_snils?: Record<string, unknown>[];
+    without_violations_no_snils?: Record<string, unknown>[];
+  };
   age_dist?: Record<string, number>;
   long_stay_days?: number;
   violations_summary?: ViolationSection[];
@@ -226,6 +250,13 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [violOpen, setViolOpen] = useState(false);
+  const [violTypeOpen, setViolTypeOpen] = useState<string | null>(null);
+  const [coverageListOpen, setCoverageListOpen] = useState<{
+    title: string;
+    key: string;
+  } | null>(null);
+  const [violTableFilter, setViolTableFilter] = useState('');
+  const [violTableFilterKey, setViolTableFilterKey] = useState(0);
   const [operations, setOperations] = useState<OpItem[]>([]);
   const [deptOptions, setDeptOptions] = useState<string[]>([]);
 
@@ -238,6 +269,7 @@ export default function App() {
   const [emkFile, setEmkFile] = useState<string | null>(null);
   const [emk, setEmk] = useState<EmkAnalysis | null>(null);
   const [emkSub, setEmkSub] = useState<'share' | 'violations' | 'doctors' | 'skp' | 'age'>('share');
+  const [emkSplitSnils, setEmkSplitSnils] = useState(false);
 
   const [ksgFiles, setKsgFiles] = useState<KsgFile[]>([]);
   const [ksgActive, setKsgActive] = useState(0);
@@ -248,6 +280,9 @@ export default function App() {
   const [ops, setOps] = useState<OpsAnalysis | null>(null);
   const [opsDepartments, setOpsDepartments] = useState<string[]>([]);
   const [opsDepartment, setOpsDepartment] = useState('');
+  const [opsScopeMode, setOpsScopeMode] = useState<EmkScopeMode>('single');
+  const [opsSummaryMode, setOpsSummaryMode] = useState<EmkSummaryMode>('all');
+  const [opsSelectedDepartments, setOpsSelectedDepartments] = useState<string[]>([]);
   const [opsSub, setOpsSub] = useState<'long' | 'table'>('long');
   const [compare, setCompare] = useState<CompareResult | null>(null);
   const [compareIndices, setCompareIndices] = useState<number[]>([]);
@@ -287,6 +322,9 @@ export default function App() {
                 emk_scope_mode: emkScopeMode,
                 emk_summary_mode: emkSummaryMode,
                 emk_selected_departments: emkSelectedDepartments,
+                ops_scope_mode: opsScopeMode,
+                ops_summary_mode: opsSummaryMode,
+                ops_selected_departments: opsSelectedDepartments,
               },
             },
           });
@@ -299,7 +337,19 @@ export default function App() {
     return () => {
       if (persistTimer.current) window.clearTimeout(persistTimer.current);
     };
-  }, [tab, emkSub, ksgSub, opsSub, compareCharts, emkScopeMode, emkSummaryMode, emkSelectedDepartments]);
+  }, [
+    tab,
+    emkSub,
+    ksgSub,
+    opsSub,
+    compareCharts,
+    emkScopeMode,
+    emkSummaryMode,
+    emkSelectedDepartments,
+    opsScopeMode,
+    opsSummaryMode,
+    opsSelectedDepartments,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -348,6 +398,15 @@ export default function App() {
         }
         if (Array.isArray(prefs?.emk_selected_departments)) {
           setEmkSelectedDepartments(prefs.emk_selected_departments.filter(Boolean));
+        }
+        if (prefs?.ops_scope_mode === 'single' || prefs?.ops_scope_mode === 'summary') {
+          setOpsScopeMode(prefs.ops_scope_mode);
+        }
+        if (prefs?.ops_summary_mode === 'all' || prefs?.ops_summary_mode === 'multi') {
+          setOpsSummaryMode(prefs.ops_summary_mode);
+        }
+        if (Array.isArray(prefs?.ops_selected_departments)) {
+          setOpsSelectedDepartments(prefs.ops_selected_departments.filter(Boolean));
         }
         prefsReady.current = true;
         try {
@@ -635,6 +694,7 @@ export default function App() {
       setOpsDepartments(deps);
       const dept = loaded.preferred_department || loaded.department || deps[0] || '';
       setOpsDepartment(dept);
+      setOpsScopeMode('single');
       if (loaded.known_departments?.length) setDeptOptions(loaded.known_departments);
       setOps(loaded);
       setTab('ops');
@@ -656,27 +716,98 @@ export default function App() {
     await loadOpsFromPath(path);
   }, [loadOpsFromPath]);
 
-  const reanalyzeOps = useCallback(async (dept?: string) => {
-    if (!opsFile) return;
-    setBusy(true);
-    setError(null);
-    try {
-      setStatus('Пересчёт операций…');
-      const nextDept = dept ?? opsDepartment;
-      if (dept !== undefined) setOpsDepartment(dept);
-      const analysis = await rpc<OpsAnalysis>('ops.analyze', {
-        department: nextDept || undefined,
-      });
-      setOps(analysis);
-      if (analysis.departments?.length) setOpsDepartments(analysis.departments);
-      if (analysis.department) setOpsDepartment(analysis.department);
-      setStatus('Операции пересчитаны');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }, [opsFile, opsDepartment]);
+  const runOpsAnalyze = useCallback(
+    async (opts?: {
+      scope?: EmkScope;
+      department?: string;
+      departments?: string[];
+      scopeMode?: EmkScopeMode;
+      summaryMode?: EmkSummaryMode;
+    }) => {
+      if (!opsFile) return;
+      const nextScopeMode = opts?.scopeMode ?? opsScopeMode;
+      const nextSummaryMode = opts?.summaryMode ?? opsSummaryMode;
+      const nextDepartment = opts?.department ?? opsDepartment;
+      const nextSelected = opts?.departments ?? opsSelectedDepartments;
+
+      let scope: EmkScope = opts?.scope ?? 'single';
+      let analyzeDepartment = nextDepartment;
+      let analyzeDepartments = nextSelected;
+
+      if (!opts?.scope) {
+        if (nextScopeMode === 'summary') {
+          if (nextSummaryMode === 'all') {
+            scope = 'all';
+          } else {
+            scope = 'multi';
+            analyzeDepartments = nextSelected;
+          }
+        } else {
+          scope = 'single';
+          analyzeDepartment = nextDepartment;
+        }
+      }
+
+      if (scope === 'multi' && !analyzeDepartments.length) {
+        setError('Выберите хотя бы одно отделение');
+        return;
+      }
+
+      setBusy(true);
+      setError(null);
+      try {
+        setStatus('Анализ операций…');
+        const params: Record<string, unknown> = { scope };
+        if (scope === 'single') params.department = analyzeDepartment;
+        if (scope === 'multi') params.departments = analyzeDepartments;
+        const analysis = await rpc<OpsAnalysis>('ops.analyze', params);
+        setOps(analysis);
+        setOpsScopeMode(nextScopeMode);
+        setOpsSummaryMode(nextSummaryMode);
+        if (scope === 'single' && opts?.department !== undefined) {
+          setOpsDepartment(opts.department);
+        } else if (scope === 'single' && analysis.department && nextScopeMode === 'single') {
+          // keep single-dept select in sync when label is a real department name
+          if (opsDepartments.includes(analysis.department)) {
+            setOpsDepartment(analysis.department);
+          }
+        }
+        if (scope === 'multi') setOpsSelectedDepartments(analyzeDepartments);
+        if (analysis.departments?.length) setOpsDepartments(analysis.departments);
+        setStatus(
+          `Операции: ${analysis.file_name || opsFile} · ${analysis.department || '—'}`,
+        );
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [
+      opsFile,
+      opsScopeMode,
+      opsSummaryMode,
+      opsDepartment,
+      opsSelectedDepartments,
+      opsDepartments,
+    ],
+  );
+
+  const reanalyzeOps = useCallback(
+    async (dept?: string) => {
+      if (dept !== undefined) {
+        setOpsDepartment(dept);
+        await runOpsAnalyze({
+          scope: 'single',
+          scopeMode: 'single',
+          department: dept,
+        });
+        return;
+      }
+      await runOpsAnalyze();
+    },
+    [runOpsAnalyze],
+  );
 
   const selectKsg = useCallback(async (index: number) => {
     setBusy(true);
@@ -1022,19 +1153,35 @@ export default function App() {
     [config.ksg_display],
   );
 
-  const shareBars = useMemo(() => {
+  const snilsSplitOn = Boolean(emkSplitSnils && emk?.snils_available);
+
+  const shareBars = useMemo((): BarItem[] => {
     if (!emk?.violation_share?.length) return [];
-    return emk.violation_share.map((row) => {
-      const label = String(row['Тип нарушения'] ?? '');
-      return {
-        label,
-        value: Number(row['Доля, %'] ?? 0),
-        color: VIOLATION_COLORS[label],
-      };
-    });
+    return emk.violation_share
+      .map((row) => {
+        const label = String(row['Тип нарушения'] ?? '');
+        return {
+          label,
+          value: Number(row['Доля, %'] ?? 0),
+          color: VIOLATION_COLORS[label],
+        };
+      })
+      .sort((a, b) => b.value - a.value);
   }, [emk]);
 
-  const coverageBars = useMemo(() => {
+  const shareTableRows = useMemo(() => {
+    if (!emk) return [];
+    if (snilsSplitOn && emk.violation_share_by_snils?.length) {
+      return [...emk.violation_share_by_snils].sort(
+        (a, b) => Number(b['Всего'] ?? 0) - Number(a['Всего'] ?? 0),
+      );
+    }
+    return [...(emk.violation_share || [])].sort(
+      (a, b) => Number(b['Количество'] ?? 0) - Number(a['Количество'] ?? 0),
+    );
+  }, [emk, snilsSplitOn]);
+
+  const coverageBars = useMemo((): BarItem[] => {
     if (!emk) return [];
     return [
       {
@@ -1050,6 +1197,68 @@ export default function App() {
     ];
   }, [emk]);
 
+  const coverageGroups = useMemo((): BarGroup[] => {
+    if (!emk?.cases_coverage_by_snils) return [];
+    const c = emk.cases_coverage_by_snils;
+    const build = (
+      label: string,
+      withVal: number,
+      withoutVal: number,
+      withColor: string,
+      withoutColor: string,
+    ): BarGroup => {
+      const series: BarGroup['series'] = [];
+      if (withVal > 0) series.push({ key: 'with', value: withVal, color: withColor });
+      if (withoutVal > 0) series.push({ key: 'without', value: withoutVal, color: withoutColor });
+      // Группу «Без нарушений» / «С нарушениями» всегда показываем; если всё 0 — пустой столбец
+      if (!series.length) {
+        series.push({ key: 'with', value: 0, color: withColor });
+      }
+      return { label, series };
+    };
+    return [
+      build(
+        'С нарушениями',
+        Number(c.with_violations_snils ?? 0),
+        Number(c.with_violations_no_snils ?? 0),
+        'var(--danger)',
+        '#c45c5c',
+      ),
+      build(
+        'Без нарушений',
+        Number(c.without_violations_snils ?? 0),
+        Number(c.without_violations_no_snils ?? 0),
+        'var(--ok)',
+        '#6a9b7a',
+      ),
+    ];
+  }, [emk]);
+
+  const coverageTableRows = useMemo(() => {
+    if (!emk) return [];
+    if (snilsSplitOn && emk.cases_coverage_by_snils) {
+      const c = emk.cases_coverage_by_snils;
+      return [
+        {
+          Группа: 'С нарушениями',
+          'С СНИЛС': c.with_violations_snils,
+          'Без СНИЛС': c.with_violations_no_snils,
+          Всего: c.with_violations_snils + c.with_violations_no_snils,
+        },
+        {
+          Группа: 'Без нарушений',
+          'С СНИЛС': c.without_violations_snils,
+          'Без СНИЛС': c.without_violations_no_snils,
+          Всего: c.without_violations_snils + c.without_violations_no_snils,
+        },
+      ];
+    }
+    return [
+      { Группа: 'С нарушениями', Количество: emk.cases_with_violations ?? 0 },
+      { Группа: 'Без нарушений', Количество: emk.cases_without_violations ?? 0 },
+    ];
+  }, [emk, snilsSplitOn]);
+
   const ageBars = useMemo(() => {
     if (!emk?.age_dist) return [];
     return Object.entries(emk.age_dist).map(([label, value]) => ({
@@ -1057,6 +1266,49 @@ export default function App() {
       value: Number(value) || 0,
     }));
   }, [emk]);
+
+  const violTypeRows = useMemo((): ViolationTypeRow[] => {
+    if (!emk?.violations?.length || !violTypeOpen) return [];
+    return emk.violations
+      .filter((r) => String(r['тип_нарушения'] ?? '') === violTypeOpen)
+      .map((r) => ({
+        КВС: String(r['КВС'] ?? ''),
+        пометка: String(r['пометка'] ?? ''),
+        врач: formatShortPersonName(r['врач']),
+        нарушение: String(r['нарушение'] ?? ''),
+      }));
+  }, [emk, violTypeOpen]);
+
+  const coverageListRows = useMemo((): ViolationTypeRow[] => {
+    if (!emk?.cases_coverage_lists || !coverageListOpen) return [];
+    const raw = emk.cases_coverage_lists[
+      coverageListOpen.key as keyof NonNullable<EmkAnalysis['cases_coverage_lists']>
+    ];
+    if (!raw?.length) return [];
+    return raw.map((r) => ({
+      КВС: String(r['КВС'] ?? ''),
+      пометка: String(r['пометка'] ?? ''),
+      врач: formatShortPersonName(r['врач']),
+      нарушений: Number(r['нарушений'] ?? 0),
+    }));
+  }, [emk, coverageListOpen]);
+
+  const openViolationType = useCallback((typeLabel: string) => {
+    setCoverageListOpen(null);
+    setViolTypeOpen(typeLabel);
+  }, []);
+
+  const openViolationTypeInTable = useCallback((typeLabel: string) => {
+    setViolTypeOpen(null);
+    setEmkSub('violations');
+    setViolTableFilter(typeLabel);
+    setViolTableFilterKey((k) => k + 1);
+  }, []);
+
+  const openCoverageList = useCallback((title: string, listKey: string) => {
+    setViolTypeOpen(null);
+    setCoverageListOpen({ title, key: listKey });
+  }, []);
 
   return (
     <div
@@ -1368,6 +1620,16 @@ export default function App() {
                     </button>
                   ))}
                 </div>
+                {emk.snils_available && (
+                  <label className="emk-snils-split" title="Развести показатели по наличию СНИЛС">
+                    <input
+                      type="checkbox"
+                      checked={emkSplitSnils}
+                      onChange={(e) => setEmkSplitSnils(e.target.checked)}
+                    />
+                    Разделить с СНИЛС / без СНИЛС
+                  </label>
+                )}
 
                 <div className="panel">
                   {emkSub === 'share' && (
@@ -1375,14 +1637,64 @@ export default function App() {
                       <div className="charts-row">
                         <div className="chart-block">
                           <h4>Структура нарушений, %</h4>
-                          <BarChart items={shareBars} unit="%" />
+                          <BarChart
+                            items={shareBars}
+                            unit="%"
+                            itemHint="Двойной клик — список нарушений этого типа"
+                            onItemDoubleClick={(item) => openViolationType(item.label)}
+                          />
                         </div>
-                        <div className="chart-block chart-block--split">
-                          <h4>Истории с / без нарушений</h4>
-                          <BarChart items={coverageBars} />
-                        </div>
+                        {(snilsSplitOn ? coverageGroups.length > 0 : coverageBars.length > 0) && (
+                          <div className="chart-block chart-block--below">
+                            <h4>
+                              Истории с / без нарушений
+                              {snilsSplitOn ? ' (по СНИЛС)' : ''}
+                            </h4>
+                            {snilsSplitOn ? (
+                              <BarChart
+                                groups={coverageGroups}
+                                legend={[
+                                  { key: 'with', label: 'с СНИЛС', color: 'var(--danger)' },
+                                  { key: 'without', label: 'без СНИЛС', color: '#c45c5c' },
+                                ]}
+                                seriesHint="Двойной клик — список историй этой группы"
+                                onSeriesDoubleClick={(group, series) => {
+                                  const snilsPart =
+                                    series.key === 'without' ? 'без СНИЛС' : 'с СНИЛС';
+                                  const key =
+                                    group.label === 'Без нарушений'
+                                      ? series.key === 'without'
+                                        ? 'without_violations_no_snils'
+                                        : 'without_violations_snils'
+                                      : series.key === 'without'
+                                        ? 'with_violations_no_snils'
+                                        : 'with_violations_snils';
+                                  openCoverageList(`${group.label} · ${snilsPart}`, key);
+                                }}
+                              />
+                            ) : (
+                              <BarChart
+                                items={coverageBars}
+                                itemHint="Двойной клик — список историй"
+                                onItemDoubleClick={(item) => {
+                                  const key =
+                                    item.label === 'Без нарушений'
+                                      ? 'without_violations'
+                                      : 'with_violations';
+                                  openCoverageList(item.label, key);
+                                }}
+                              />
+                            )}
+                          </div>
+                        )}
                       </div>
-                      <DataTable rows={emk.violation_share} />
+                      <DataTable rows={shareTableRows} />
+                      {snilsSplitOn && coverageTableRows.length > 0 && (
+                        <div style={{ marginTop: 12 }}>
+                          <h4>Истории с / без нарушений</h4>
+                          <DataTable rows={coverageTableRows} />
+                        </div>
+                      )}
                     </>
                   )}
                   {emkSub === 'age' && (
@@ -1398,7 +1710,14 @@ export default function App() {
                       </div>
                     </>
                   )}
-                  {emkSub === 'violations' && <DataTable rows={emk.violations} />}
+                  {emkSub === 'violations' && (
+                    <DataTable
+                      rows={emk.violations}
+                      initialQuery={violTableFilter}
+                      queryResetKey={violTableFilterKey}
+                      filterPlaceholder="Поиск / тип нарушения…"
+                    />
+                  )}
                   {emkSub === 'doctors' && (
                     <>
                       <h3>Сводка по врачам</h3>
@@ -1681,21 +2000,57 @@ export default function App() {
               >
                 Пересчитать
               </button>
-              {opsDepartments.length > 1 && (
-                <label className="field" title="Фильтр по отделению госпитализации">
-                  Отделение
-                  <select
-                    value={opsDepartment}
-                    disabled={busy}
-                    onChange={(e) => void reanalyzeOps(e.target.value)}
-                  >
-                    {opsDepartments.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+              {opsDepartments.length > 0 && (
+                <EmkDepartmentScope
+                  radioName="ops-summary-mode"
+                  departments={opsDepartments}
+                  singleDepartment={opsDepartment}
+                  onSingleDepartmentChange={(value) => void reanalyzeOps(value)}
+                  scopeMode={opsScopeMode}
+                  onScopeModeChange={(mode) => {
+                    setOpsScopeMode(mode);
+                    if (mode === 'summary') {
+                      if (opsSummaryMode === 'all') {
+                        void runOpsAnalyze({
+                          scopeMode: 'summary',
+                          summaryMode: 'all',
+                          scope: 'all',
+                        });
+                      } else if (opsSelectedDepartments.length) {
+                        void runOpsAnalyze({
+                          scopeMode: 'summary',
+                          summaryMode: 'multi',
+                          scope: 'multi',
+                          departments: opsSelectedDepartments,
+                        });
+                      }
+                    } else if (opsDepartment) {
+                      void reanalyzeOps(opsDepartment);
+                    }
+                  }}
+                  summaryMode={opsSummaryMode}
+                  onSummaryModeChange={(mode) => {
+                    setOpsSummaryMode(mode);
+                    if (mode === 'all') {
+                      void runOpsAnalyze({
+                        scopeMode: 'summary',
+                        summaryMode: 'all',
+                        scope: 'all',
+                      });
+                    }
+                  }}
+                  selectedDepartments={opsSelectedDepartments}
+                  onSelectedDepartmentsChange={setOpsSelectedDepartments}
+                  disabled={busy}
+                  onApply={() =>
+                    void runOpsAnalyze({
+                      scopeMode: 'summary',
+                      summaryMode: opsSummaryMode,
+                      scope: opsSummaryMode === 'all' ? 'all' : 'multi',
+                      departments: opsSelectedDepartments,
+                    })
+                  }
+                />
               )}
             </div>
 
@@ -1728,6 +2083,12 @@ export default function App() {
                   <Kpi title={`Длительные (>${ops.long_op_hours} ч)`} value={fmtNum(ops.long_count)} />
                   <Kpi title="Без опер.стола" value={fmtNum(ops.missing_table_count)} />
                 </div>
+                {opsScopeMode === 'summary' && (ops.violations_summary?.length ?? 0) > 0 && (
+                  <div className="panel" style={{ marginBottom: 12 }}>
+                    <h4 style={{ marginTop: 0 }}>Сводка по нарушениям</h4>
+                    <DataTable rows={ops.violations_summary || []} />
+                  </div>
+                )}
                 <div className="subtabs">
                   {(
                     [
@@ -1794,6 +2155,24 @@ export default function App() {
         <ViolationsSummaryDialog
           sections={emk.violations_summary}
           onClose={() => setViolOpen(false)}
+        />
+      )}
+
+      {violTypeOpen && (
+        <ViolationTypeDialog
+          typeLabel={violTypeOpen}
+          rows={violTypeRows}
+          onClose={() => setViolTypeOpen(null)}
+          onOpenInTable={() => openViolationTypeInTable(violTypeOpen)}
+        />
+      )}
+
+      {coverageListOpen && (
+        <ViolationTypeDialog
+          typeLabel={coverageListOpen.title}
+          rows={coverageListRows}
+          showOpenInTable={false}
+          onClose={() => setCoverageListOpen(null)}
         />
       )}
 

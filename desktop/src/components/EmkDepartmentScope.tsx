@@ -16,6 +16,7 @@ export function EmkDepartmentScope({
   onSelectedDepartmentsChange,
   disabled,
   onApply,
+  radioName = 'emk-summary-mode',
 }: {
   departments: string[];
   singleDepartment: string;
@@ -28,6 +29,8 @@ export function EmkDepartmentScope({
   onSelectedDepartmentsChange: (values: string[]) => void;
   disabled?: boolean;
   onApply: () => void;
+  /** Уникальное имя radio-группы (если компонент на нескольких вкладках). */
+  radioName?: string;
 }) {
   const selectedSet = useMemo(() => new Set(selectedDepartments), [selectedDepartments]);
   const allSelected =
@@ -87,7 +90,7 @@ export function EmkDepartmentScope({
             <label className="emk-dept-scope__radio">
               <input
                 type="radio"
-                name="emk-summary-mode"
+                name={radioName}
                 checked={summaryMode === 'all'}
                 disabled={disabled}
                 onChange={() => onSummaryModeChange('all')}
@@ -97,7 +100,7 @@ export function EmkDepartmentScope({
             <label className="emk-dept-scope__radio">
               <input
                 type="radio"
-                name="emk-summary-mode"
+                name={radioName}
                 checked={summaryMode === 'multi'}
                 disabled={disabled}
                 onChange={() => onSummaryModeChange('multi')}

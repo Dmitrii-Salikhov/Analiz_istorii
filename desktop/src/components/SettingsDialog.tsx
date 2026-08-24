@@ -65,6 +65,9 @@ export type AppConfig = {
     emk_scope_mode?: 'single' | 'summary';
     emk_summary_mode?: 'all' | 'multi';
     emk_selected_departments?: string[];
+    ops_scope_mode?: 'single' | 'summary';
+    ops_summary_mode?: 'all' | 'multi';
+    ops_selected_departments?: string[];
   };
   report_profiles?: ReportProfilesConfig;
   recent_emk?: string[];

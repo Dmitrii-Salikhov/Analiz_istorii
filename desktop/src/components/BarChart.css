@@ -1,9 +1,41 @@
+.bar-chart-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.bar-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bar-legend__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
 .bar-chart {
   display: flex;
   align-items: flex-end;
   gap: 10px;
   padding: 8px 4px 0;
   overflow-x: auto;
+}
+
+.bar-chart--grouped {
+  gap: 12px;
 }
 
 .bar-col {
@@ -14,6 +46,50 @@
   flex-direction: column;
   align-items: center;
   gap: 6px;
+}
+
+.bar-col--clickable {
+  cursor: pointer;
+}
+
+.bar-col--clickable:hover .bar-track {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.bar-col--clickable:hover .bar-fill {
+  filter: brightness(1.06);
+}
+
+.bar-group {
+  flex: 1 0 88px;
+  min-width: 88px;
+  max-width: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.bar-group__pair {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  width: 100%;
+  justify-content: center;
+}
+
+.bar-group__pair:has(.bar-group__col:only-child) .bar-group__col {
+  flex: 0 0 56%;
+  max-width: 72px;
+}
+
+.bar-group__col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
 }
 
 .bar-track {
@@ -27,6 +103,10 @@
   overflow: hidden;
 }
 
+.bar-track--slim {
+  height: 120px;
+}
+
 .bar-fill {
   width: 100%;
   border-radius: 2px 2px 0 0;
@@ -37,6 +117,10 @@
   font-size: 11px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+.bar-group__col .bar-value {
+  font-size: 10px;
 }
 
 .bar-label {

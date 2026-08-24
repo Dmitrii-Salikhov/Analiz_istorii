@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { copyText, rowsToTsv } from '../lib/clipboard';
 import './DataTable.css';
 
@@ -8,6 +8,8 @@ export function DataTable({
   filterable = true,
   copyable = true,
   filterPlaceholder = 'Поиск по таблице…',
+  initialQuery = '',
+  queryResetKey,
   formatCopy,
   getCellClass,
 }: {
@@ -16,6 +18,10 @@ export function DataTable({
   filterable?: boolean;
   copyable?: boolean;
   filterPlaceholder?: string;
+  /** Начальный / внешний фильтр (например, тип нарушения). */
+  initialQuery?: string;
+  /** При смене ключа подставляется initialQuery заново. */
+  queryResetKey?: string | number;
   /** Если задан — используется вместо TSV при копировании. */
   formatCopy?: (rows: Record<string, unknown>[]) => string;
   getCellClass?: (
@@ -24,8 +30,13 @@ export function DataTable({
     rowIndex: number,
   ) => string | undefined;
 }) {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery);
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (queryResetKey === undefined) return;
+    setQuery(initialQuery);
+  }, [queryResetKey, initialQuery]);
 
   const columns = useMemo(() => {
     if (!rows.length) return [] as string[];

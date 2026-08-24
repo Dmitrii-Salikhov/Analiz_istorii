@@ -197,6 +197,18 @@ EMD_EPICRISIS_STATUS_COL = 'Статус ЭМД "Выписной эпикриз
 EMD_EPICRISIS_NUMBER_COL = 'Номер ЭМД "Выписной эпикриз"'
 EMD_EPICRISIS_TYPE = "ЭМД выписной эпикриз"
 
+SNILS_COL = "Наличие СНИЛС"
+SNILS_NOTE = "У пациента нет СНИЛС"
+SNILS_MARKED_VIOLATION_TYPES: frozenset[str] = frozenset(
+    {
+        "Первичный осмотр",
+        "Эпикриз",
+        "МКСБ",
+        "Протоколы операций",
+        EMD_EPICRISIS_TYPE,
+    }
+)
+
 
 def _has_ids(doc_str) -> bool:
     if pd.isna(doc_str):
@@ -222,6 +234,155 @@ def _nonempty_cell(val) -> str:
         return ""
     return text
 
+
+def snils_column_available(df: pd.DataFrame | None) -> bool:
+    return df is not None and SNILS_COL in getattr(df, "columns", [])
+
+
+def patient_has_snils(val: Any) -> bool:
+    """True только при явном «ДА»."""
+    text = _nonempty_cell(val).upper().replace("Ё", "Е")
+    return text == "ДА"
+
+
+def snils_note_for_violation(tip: str, has_snils: bool | None) -> str:
+    """Пометка в таблице нарушений (рядом с КВС)."""
+    if has_snils is None or has_snils:
+        return ""
+    if tip not in SNILS_MARKED_VIOLATION_TYPES:
+        return ""
+    return SNILS_NOTE
+
+
+def violation_share_table_by_snils(violations_df: pd.DataFrame) -> pd.DataFrame:
+    """Структура нарушений с разбивкой: С СНИЛС / Без СНИЛС. Доли — % от всех нарушений."""
+    cols = [
+        "Тип нарушения",
+        "С СНИЛС",
+        "Без СНИЛС",
+        "Всего",
+        "Доля с СНИЛС, %",
+        "Доля без СНИЛС, %",
+    ]
+    if violations_df is None or violations_df.empty or "есть_СНИЛС" not in violations_df.columns:
+        return pd.DataFrame(columns=cols)
+    total = len(violations_df)
+    rows: list[dict[str, Any]] = []
+    for tip, group in violations_df.groupby("тип_нарушения", sort=False):
+        with_s = int((group["есть_СНИЛС"] == "ДА").sum())
+        without_s = int((group["есть_СНИЛС"] == "НЕТ").sum())
+        unknown = int((group["есть_СНИЛС"] == "").sum())
+        with_s += unknown
+        tip_total = with_s + without_s
+        rows.append(
+            {
+                "Тип нарушения": tip,
+                "С СНИЛС": with_s,
+                "Без СНИЛС": without_s,
+                "Всего": tip_total,
+                "Доля с СНИЛС, %": round(100.0 * with_s / total, 1) if total else 0.0,
+                "Доля без СНИЛС, %": round(100.0 * without_s / total, 1) if total else 0.0,
+            }
+        )
+    return pd.DataFrame(rows, columns=cols)
+
+
+def cases_coverage_by_snils(
+    prepared: pd.DataFrame,
+    violations_df: pd.DataFrame,
+) -> dict[str, Any] | None:
+    """
+    KPI покрытия с разбивкой по СНИЛС (уникальные КВС) + списки историй для UI.
+    """
+    if not snils_column_available(prepared) or "Номер КВС" not in prepared.columns:
+        return None
+    has = prepared[SNILS_COL].map(patient_has_snils)
+    kvs = prepared["Номер КВС"].astype(str)
+    doctors = (
+        prepared["Лечащий врач"]
+        if "Лечащий врач" in prepared.columns
+        else pd.Series([""] * len(prepared), index=prepared.index)
+    )
+    if violations_df is not None and not violations_df.empty and "КВС" in violations_df.columns:
+        bad = set(violations_df["КВС"].astype(str))
+        viol_counts = violations_df["КВС"].astype(str).value_counts().to_dict()
+    else:
+        bad = set()
+        viol_counts = {}
+
+    buckets: dict[str, list[dict[str, Any]]] = {
+        "with_violations_snils": [],
+        "with_violations_no_snils": [],
+        "without_violations_snils": [],
+        "without_violations_no_snils": [],
+    }
+    seen: set[str] = set()
+    for k, snils_ok, doc in zip(kvs, has, doctors, strict=False):
+        if k in seen:
+            continue
+        seen.add(k)
+        in_bad = k in bad
+        note = "" if snils_ok else SNILS_NOTE
+        row = {
+            "КВС": k,
+            "пометка": note,
+            "врач": doc,
+            "нарушений": int(viol_counts.get(k, 0)),
+        }
+        if in_bad and snils_ok:
+            buckets["with_violations_snils"].append(row)
+        elif in_bad and not snils_ok:
+            buckets["with_violations_no_snils"].append(row)
+        elif (not in_bad) and snils_ok:
+            buckets["without_violations_snils"].append(row)
+        else:
+            buckets["without_violations_no_snils"].append(row)
+
+    return {
+        "with_violations_snils": len(buckets["with_violations_snils"]),
+        "with_violations_no_snils": len(buckets["with_violations_no_snils"]),
+        "without_violations_snils": len(buckets["without_violations_snils"]),
+        "without_violations_no_snils": len(buckets["without_violations_no_snils"]),
+        "lists": buckets,
+    }
+
+
+def cases_coverage_lists(
+    prepared: pd.DataFrame,
+    violations_df: pd.DataFrame,
+) -> dict[str, list[dict[str, Any]]]:
+    """Списки КВС с / без нарушений (без разбивки по СНИЛС)."""
+    if prepared is None or prepared.empty or "Номер КВС" not in prepared.columns:
+        return {"with_violations": [], "without_violations": []}
+    if violations_df is not None and not violations_df.empty and "КВС" in violations_df.columns:
+        bad = set(violations_df["КВС"].astype(str))
+        viol_counts = violations_df["КВС"].astype(str).value_counts().to_dict()
+    else:
+        bad = set()
+        viol_counts = {}
+    snils_known = snils_column_available(prepared)
+    with_v: list[dict[str, Any]] = []
+    without_v: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for _, prow in prepared.iterrows():
+        k = str(prow["Номер КВС"])
+        if k in seen:
+            continue
+        seen.add(k)
+        note = ""
+        if snils_known and not patient_has_snils(prow.get(SNILS_COL)):
+            note = SNILS_NOTE
+        row = {
+            "КВС": k,
+            "пометка": note,
+            "врач": prow.get("Лечащий врач", ""),
+            "нарушений": int(viol_counts.get(k, 0)),
+        }
+        if k in bad:
+            with_v.append(row)
+        else:
+            without_v.append(row)
+    return {"with_violations": with_v, "without_violations": without_v}
 
 def emd_sent_to_storage_mask(df: pd.DataFrame) -> pd.Series:
     """ЭМД выписного эпикриза зарегистрирован или отправлен в хранилище."""
@@ -646,6 +807,8 @@ def analyze_lor(
     empty_viol = pd.DataFrame(
         columns=[
             "КВС",
+            "пометка",
+            "есть_СНИЛС",
             "возраст",
             "тип госпитализации",
             "врач",
@@ -684,13 +847,41 @@ def analyze_lor(
     prepared["Возрастная группа"] = prepared["Возраст"].apply(age_group)
     age_dist = prepared["Возрастная группа"].value_counts()
 
+    snils_known = snils_column_available(prepared)
+    if snils_known:
+        prepared["_has_snils"] = prepared[SNILS_COL].map(patient_has_snils)
+
     violations: list[dict] = []
+    empty_viol_cols = [
+        "КВС",
+        "пометка",
+        "есть_СНИЛС",
+        "возраст",
+        "тип госпитализации",
+        "врач",
+        "отделение",
+        "тип_нарушения",
+        "нарушение",
+    ]
+
+    def _row_has_snils(row) -> bool | None:
+        if not snils_known:
+            return None
+        return bool(row.get("_has_snils"))
+
+    def _snils_flag(has: bool | None) -> str:
+        if has is None:
+            return ""
+        return "ДА" if has else "НЕТ"
 
     def add_rows(subset: pd.DataFrame, tip: str, text_fn):
         for _, row in subset.iterrows():
+            has = _row_has_snils(row)
             violations.append(
                 {
                     "КВС": row["Номер КВС"],
+                    "пометка": snils_note_for_violation(tip, has),
+                    "есть_СНИЛС": _snils_flag(has),
                     "возраст": row["Возраст"],
                     "тип госпитализации": row["Тип госпитализации"],
                     "врач": row["Лечащий врач"],
@@ -772,33 +963,33 @@ def analyze_lor(
     for _, row in surg.iterrows():
         op = int(row["Хир_кол"])
         prot = int(row["Хир_прот"])
-        if prot < op:
+        if prot < op or prot > op:
+            has = _row_has_snils(row)
+            tip = "Протоколы операций"
+            if prot < op:
+                text = f"Несоответствие протоколов: операций {op}, протоколов {prot}"
+            else:
+                text = f"Избыток протоколов: операций {op}, протоколов {prot}"
             violations.append(
                 {
                     "КВС": row["Номер КВС"],
+                    "пометка": snils_note_for_violation(tip, has),
+                    "есть_СНИЛС": _snils_flag(has),
                     "возраст": row["Возраст"],
                     "тип госпитализации": row["Тип госпитализации"],
                     "врач": row["Лечащий врач"],
                     "отделение": row.get("Отделение", ""),
-                    "тип_нарушения": "Протоколы операций",
-                    "нарушение": f"Несоответствие протоколов: операций {op}, протоколов {prot}",
-                }
-            )
-        elif prot > op:
-            violations.append(
-                {
-                    "КВС": row["Номер КВС"],
-                    "возраст": row["Возраст"],
-                    "тип госпитализации": row["Тип госпитализации"],
-                    "врач": row["Лечащий врач"],
-                    "отделение": row.get("Отделение", ""),
-                    "тип_нарушения": "Протоколы операций",
-                    "нарушение": f"Избыток протоколов: операций {op}, протоколов {prot}",
+                    "тип_нарушения": tip,
+                    "нарушение": text,
                 }
             )
 
-    violations_df = pd.DataFrame(violations) if violations else empty_viol
-
+    violations_df = pd.DataFrame(violations) if violations else pd.DataFrame(columns=empty_viol_cols)
+    col_order = [c for c in empty_viol_cols if c in violations_df.columns]
+    extra = [c for c in violations_df.columns if c not in col_order]
+    violations_df = violations_df[col_order + extra]
+    if "_has_snils" in prepared.columns:
+        prepared = prepared.drop(columns=["_has_snils"])
     violations_for_doctor = violations_df[
         ~violations_df["тип_нарушения"].isin(VIOLATION_TYPES_EXCLUDED_FROM_DOCTOR_STATS)
     ] if not violations_df.empty else empty_viol
@@ -853,35 +1044,48 @@ def analyze_lor(
     )
 
 
+def _snils_note_short(note: Any) -> str:
+    """Краткая пометка для сводки: «нет СНИЛС»."""
+    text = str(note or "").strip()
+    if not text:
+        return ""
+    if "снилс" in text.lower():
+        return "нет СНИЛС"
+    return text
+
+
 def _violation_bullet_line(row: pd.Series, vtype: str) -> str:
     doctor_short = format_doctor_name(row["врач"])
+    snils = _snils_note_short(row.get("пометка"))
+    kvs = row["КВС"]
+    if snils:
+        head = f"• {kvs} - {snils} (Врач: {doctor_short})"
+    else:
+        head = f"• {kvs} (Врач: {doctor_short})"
+
     if vtype == "Протоколы операций":
         match = re.search(r"операций (\d+), протоколов (\d+)", str(row["нарушение"]))
         if match:
-            return (
-                f"• {row['КВС']} ({doctor_short}): {match.group(1)} операции / "
-                f"{match.group(2)} протоколов"
-            )
-        return f"• {row['КВС']} ({doctor_short}): {row['нарушение']}"
+            return f"{head}: {match.group(1)} операции / {match.group(2)} протоколов"
+        return f"{head}: {row['нарушение']}"
     if vtype in COUNT_DEFICIT_TYPES:
         text = str(row["нарушение"])
         match = re.search(r"нужно (\d+), оформлено (\d+)", text)
         if match:
-            return (
-                f"• {row['КВС']} ({doctor_short}): нужно {match.group(1)}, "
-                f"оформлено {match.group(2)}"
-            )
-        return f"• {row['КВС']} ({doctor_short}): {text}"
+            return f"{head}: нужно {match.group(1)}, оформлено {match.group(2)}"
+        return f"{head}: {text}"
     if vtype == "МКСБ":
         age_str = f"{int(row['возраст'])}г" if pd.notna(row["возраст"]) else "?г"
-        return f"• {row['КВС']} ({age_str}) — {doctor_short}"
+        if snils:
+            return f"• {kvs} - {snils} ({age_str}, Врач: {doctor_short})"
+        return f"• {kvs} ({age_str}) — {doctor_short}"
     if vtype == "Длительная госпитализация":
         match = re.search(r"\((\d+)\)", str(row["нарушение"]))
         days = match.group(1) if match else "?"
-        return f"• {row['КВС']} ({doctor_short}) — {days} дн."
+        return f"{head} — {days} дн."
     if vtype == EMD_EPICRISIS_TYPE:
-        return f"• {row['КВС']} ({doctor_short}): {row['нарушение']}"
-    return f"• {row['КВС']} ({doctor_short})"
+        return f"{head}: {row['нарушение']}"
+    return head
 
 
 def _violation_group_lines(
