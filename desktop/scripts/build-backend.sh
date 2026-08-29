@@ -5,19 +5,21 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO"
 
 PY=""
-for candidate in "$REPO/venv/bin/python" "$REPO/.venv/bin/python" \
-                 "$REPO/venv/Scripts/python.exe" "$REPO/.venv/Scripts/python.exe"; do
-  if [[ -x "$candidate" ]] || [[ -f "$candidate" ]]; then
+if [[ -n "${ANALIZ_LINUX_PYTHON:-}" ]]; then
+  PY="$ANALIZ_LINUX_PYTHON"
+fi
+for candidate in "$PY" "$REPO/venv/bin/python" "$REPO/.venv/bin/python" \
+                 "$REPO/venv/Scripts/python.exe" "$REPO/.venv/Scripts/python.exe" \
+                 python3.11 python3 python; do
+  [[ -z "$candidate" ]] && continue
+  if [[ -x "$candidate" ]] || command -v "$candidate" >/dev/null 2>&1; then
     PY="$candidate"
     break
   fi
 done
 if [[ -z "$PY" ]]; then
-  if command -v python3 >/dev/null 2>&1; then
-    PY=python3
-  else
-    PY=python
-  fi
+  echo "Python not found" >&2
+  exit 1
 fi
 
 "$PY" -m pip install -q pyinstaller
