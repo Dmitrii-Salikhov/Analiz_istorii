@@ -11,7 +11,7 @@ CHANGELOG: list[dict] = [
         "items": [
             "Релиз для Linux (x86_64): portable-папка `AnalizIstorii-linux.zip` "
             "рядом с Windows-сборкой на GitHub Releases.",
-            "Сборка Linux в CI на Ubuntu 20.04 для совместимости с ALT SP Workstation "
+            "Сборка Linux в CI (Debian bullseye, glibc 2.31+) для совместимости с ALT SP Workstation "
             "(glibc 2.32+, X11): распаковать и запустить `./AnalizIstorii`.",
         ],
     },

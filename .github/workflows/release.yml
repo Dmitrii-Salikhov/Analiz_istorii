@@ -103,14 +103,14 @@ jobs:
 
   build-linux:
     needs: test
-    # Ubuntu 20.04 base → glibc 2.31, совместимо с ALT SP 10.2 (glibc 2.32).
+    # Debian bullseye (glibc 2.31) → совместимо с ALT SP 10.2 (glibc 2.32).
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:20.04
+      image: python:3.11-bullseye
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system deps (Python 3.11, Node 20, Electron build libs)
+      - name: Install system deps (Node 20, Electron build libs)
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -119,16 +119,10 @@ jobs:
             libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils \
             libatspi2.0-0 libdrm2 libgbm1 libasound2 \
             libx11-xcb1 libxcb-dri3-0 libxcomposite1 libxdamage1 libxrandr2 \
-            libpango-1.0-0 libcairo2 libgdk-pixbuf2.0-0 \
-            software-properties-common
-          add-apt-repository -y ppa:deadsnakes/ppa
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            python3.11 python3.11-venv python3.11-dev
+            libpango-1.0-0 libcairo2 libgdk-pixbuf2.0-0
           curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs
-          curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
-          python3.11 --version
+          python --version
           node --version
 
       - name: Set version from tag
@@ -136,16 +130,14 @@ jobs:
 
       - name: Install Python deps
         run: |
-          python3.11 -m pip install --upgrade pip
-          python3.11 -m pip install -r requirements.txt
-          python3.11 -m pip install pyinstaller pillow
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller pillow
 
       - name: Make icons
-        run: python3.11 desktop/scripts/make-icons.py
+        run: python desktop/scripts/make-icons.py
 
       - name: Build Python sidecar
-        env:
-          ANALIZ_LINUX_PYTHON: python3.11
         run: bash desktop/scripts/build-backend.sh
 
       - name: Install Electron deps
@@ -203,7 +195,7 @@ jobs:
             2. Распакуйте в домашнюю папку (без установки и sudo)
             3. Запустите `./AnalizIstorii` из распакованной папки
 
-            Сборка Linux выполнена на базе Ubuntu 20.04 для совместимости с **glibc 2.32+**
+            Сборка Linux выполнена на базе Debian bullseye (glibc 2.31+) для совместимости с **glibc 2.32+**
             (в т.ч. ALT SP Workstation 10.2, X11). Python устанавливать не нужно.
 
             ### Важно при обновлении с 1.1.2 и раньше (Windows)
