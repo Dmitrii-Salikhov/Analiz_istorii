@@ -44,21 +44,7 @@ jobs:
 
       - name: Set version from tag
         shell: bash
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "$VERSION" > version.txt
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          export VERSION
-          node <<'NODE'
-          const fs = require('fs');
-          const version = process.env.VERSION;
-          if (!version) throw new Error('VERSION env missing');
-          const p = 'desktop/package.json';
-          const j = JSON.parse(fs.readFileSync(p, 'utf8'));
-          j.version = version;
-          fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
-          console.log('desktop/package.json ->', version);
-          NODE
+        run: bash .github/scripts/set-version.sh
 
       - name: Install Python deps
         run: |
@@ -66,17 +52,8 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller pillow
 
-      - name: Make Windows icon
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path desktop\build | Out-Null
-          python -c @"
-          from PIL import Image
-          img = Image.open('analytics.png').convert('RGBA')
-          img.save('AppIcon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
-          img.save('desktop/build/icon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
-          print('icons created')
-          "@
+      - name: Make icons
+        run: python desktop/scripts/make-icons.py
 
       - name: Build Python sidecar
         shell: pwsh
@@ -101,7 +78,6 @@ jobs:
             Get-ChildItem -Recurse release | Select-Object -First 40 FullName
             throw "AnalizIstorii.exe missing in win-unpacked"
           }
-          # ensure runtime data next to exe (extraFiles may already copy these)
           Copy-Item -Force ..\version.txt release\win-unpacked\version.txt
           Copy-Item -Force ..\KSGoperacii.csv release\win-unpacked\KSGoperacii.csv
 
@@ -117,29 +93,124 @@ jobs:
           Write-Host "SHA256: $hash"
           Get-Item AnalizIstorii.zip | Format-List Name, Length
 
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            desktop/release/AnalizIstorii.zip
+            desktop/release/AnalizIstorii.zip.sha256
+
+  build-linux:
+    needs: test
+    # Ubuntu 20.04 base → glibc 2.31, совместимо с ALT SP 10.2 (glibc 2.32).
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:20.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git zip \
+            build-essential python3-dev \
+            libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils \
+            libatspi2.0-0 libdrm2 libgbm1 libasound2 \
+            libx11-xcb1 libxcb-dri3-0 libxcomposite1 libxdamage1 libxrandr2 \
+            libpango-1.0-0 libcairo2 libgdk-pixbuf2.0-0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Set version from tag
+        run: bash .github/scripts/set-version.sh
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pillow
+
+      - name: Make icons
+        run: python desktop/scripts/make-icons.py
+
+      - name: Build Python sidecar
+        run: bash desktop/scripts/build-backend.sh
+
+      - name: Install Electron deps
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build Electron (linux-unpacked)
+        working-directory: desktop
+        run: |
+          npm run build
+          npx electron-builder --linux --x64 --dir
+          test -f release/linux-unpacked/AnalizIstorii || {
+            ls -la release/linux-unpacked | head -30
+            exit 1
+          }
+
+      - name: Create ZIP and SHA-256
+        run: bash desktop/scripts/package-linux-unpacked.sh
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            desktop/release/AnalizIstorii-linux.zip
+            desktop/release/AnalizIstorii-linux.zip.sha256
+
+  publish:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            desktop/release/AnalizIstorii.zip
-            desktop/release/AnalizIstorii.zip.sha256
+            artifacts/windows/AnalizIstorii.zip
+            artifacts/windows/AnalizIstorii.zip.sha256
+            artifacts/linux/AnalizIstorii-linux.zip
+            artifacts/linux/AnalizIstorii-linux.zip.sha256
           name: "Release ${{ github.ref_name }}"
           body: |
-            Автосборка Windows ${{ github.ref_name }} — **Electron UI**
+            Автосборка **Electron UI** — ${{ github.ref_name }}
 
-            ### Установка
+            ### Windows
             1. Скачайте `AnalizIstorii.zip`
             2. Распакуйте в любую папку (лучше не в OneDrive и не в Program Files)
             3. Запустите `AnalizIstorii.exe`
 
-            Python устанавливать не нужно.
+            ### Linux (x86_64, portable folder)
+            1. Скачайте `AnalizIstorii-linux.zip`
+            2. Распакуйте в домашнюю папку (без установки и sudo)
+            3. Запустите `./AnalizIstorii` из распакованной папки
 
-            ### Важно при обновлении с 1.1.2 и раньше
+            Сборка Linux выполнена на базе Ubuntu 20.04 для совместимости с **glibc 2.32+**
+            (в т.ч. ALT SP Workstation 10.2, X11). Python устанавливать не нужно.
+
+            ### Важно при обновлении с 1.1.2 и раньше (Windows)
             Старые сборки были на Tkinter. Для перехода на Electron лучше
             **удалить старую папку** и распаковать zip заново (не поверх `_internal`).
 
             ### Проверка целостности
-            Сверьте SHA-256 с файлом `AnalizIstorii.zip.sha256`.
+            - Windows: `AnalizIstorii.zip.sha256`
+            - Linux: `AnalizIstorii-linux.zip.sha256`
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

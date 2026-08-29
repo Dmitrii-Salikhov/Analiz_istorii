@@ -6,6 +6,16 @@ from updater import parse_version
 # Новые версии — в начале списка.
 CHANGELOG: list[dict] = [
     {
+        "version": "1.3.3",
+        "title": "Что нового в версии 1.3.3",
+        "items": [
+            "Релиз для Linux (x86_64): portable-папка `AnalizIstorii-linux.zip` "
+            "рядом с Windows-сборкой на GitHub Releases.",
+            "Сборка Linux в CI на Ubuntu 20.04 для совместимости с ALT SP Workstation "
+            "(glibc 2.32+, X11): распаковать и запустить `./AnalizIstorii`.",
+        ],
+    },
+    {
         "version": "1.3.2",
         "title": "Что нового в версии 1.3.2",
         "items": [
