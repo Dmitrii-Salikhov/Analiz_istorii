@@ -71,6 +71,58 @@ function initialFromPart(part: string): string {
   return `${cleaned.charAt(0).toUpperCase()}.`;
 }
 
+function looksLikeSurname(token: string): boolean {
+  const w = token.toLowerCase().replace(/\./g, '');
+  if (!w || isPatronymic(token) || looksLikeInitials(token.replace(/\s/g, ''))) {
+    return false;
+  }
+  const suffixes = [
+    'ov', 'ev', 'ova', 'eva', 'in', 'ina', 'yn', 'yna', 'iy', 'yy', 'aya', 'yaya',
+    'skiy', 'skaya', 'tskiy', 'tskaya', 'enko', 'uk', 'yuk',
+    'ов', 'ев', 'ёв', 'ова', 'ева', 'ёва', 'ин', 'ина', 'ын', 'ына',
+    'ий', 'ый', 'ая', 'яя', 'ский', 'ская', 'цкий', 'цкая', 'енко', 'ук', 'юк',
+  ];
+  return suffixes.some((suf) => w.endsWith(suf) && w.length > suf.length + 1);
+}
+
+function parsePersonNameParts(parts: string[]): { surname: string; nameParts: string[] } {
+  if (parts.length >= 2 && looksLikeInitials(parts[0].replace(/\s/g, ''))) {
+    return { surname: parts[parts.length - 1], nameParts: parts.slice(0, -1) };
+  }
+  if (parts.length >= 2 && isPatronymic(parts[0]) && looksLikeSurname(parts[parts.length - 1])) {
+    const middle = parts.slice(1, -1).filter(Boolean);
+    const nameParts = middle.length ? [...middle, parts[0]] : [parts[0]];
+    return {
+      surname: parts[parts.length - 1],
+      nameParts,
+    };
+  }
+  if (
+    parts.length >= 3 &&
+    looksLikeSurname(parts[0]) &&
+    isPatronymic(parts[1]) &&
+    !looksLikeSurname(parts[2])
+  ) {
+    return { surname: parts[0], nameParts: [parts[2], parts[1]] };
+  }
+  if (parts.length >= 3 && isPatronymic(parts[1]) && looksLikeSurname(parts[parts.length - 1])) {
+    return { surname: parts[parts.length - 1], nameParts: parts.slice(0, -1) };
+  }
+  if (parts.length === 2 && looksLikeSurname(parts[0]) && isPatronymic(parts[1])) {
+    return { surname: parts[0], nameParts: [parts[1]] };
+  }
+  if (parts.length === 2 && isPatronymic(parts[0]) && looksLikeSurname(parts[1])) {
+    return { surname: parts[1], nameParts: [parts[0]] };
+  }
+  let surname = parts[0];
+  let nameParts = parts.slice(1);
+  if (looksLikeInitials(surname) && parts.length >= 2) {
+    surname = parts[parts.length - 1];
+    nameParts = parts.slice(0, -1);
+  }
+  return { surname, nameParts };
+}
+
 /** «ИВАНОВ ИВАН ИВАНОВИЧ» → «Иванов И.И.»; «Гасанов Магомед Тагирович» → «Гасанов М.Т.». */
 export function formatShortPersonName(fullName: unknown): string {
   if (fullName == null) return '—';
@@ -82,23 +134,7 @@ export function formatShortPersonName(fullName: unknown): string {
   parts = parts.filter((p) => !isNumericCode(p));
   if (!parts.length) return '—';
 
-  let surname: string;
-  let nameParts: string[];
-  if (parts.length >= 2 && looksLikeInitials(parts[0].replace(/\s/g, ''))) {
-    surname = parts[parts.length - 1];
-    nameParts = parts.slice(0, -1);
-  } else if (parts.length >= 3 && isPatronymic(parts[1])) {
-    surname = parts[parts.length - 1];
-    nameParts = parts.slice(0, -1);
-  } else {
-    surname = parts[0];
-    nameParts = parts.slice(1);
-  }
-  if (looksLikeInitials(surname) && parts.length >= 2) {
-    surname = parts[parts.length - 1];
-    nameParts = parts.slice(0, -1);
-  }
-
+  const { surname, nameParts } = parsePersonNameParts(parts);
   const initials = nameParts.map(initialFromPart).filter(Boolean).join('');
   const sur = capitalizeWord(surname);
   return initials ? `${sur} ${initials}` : sur;

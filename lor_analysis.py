@@ -59,11 +59,77 @@ def _initials_from_parts(parts: list[str]) -> list[str]:
     return initials
 
 
+def _looks_like_surname(token: str) -> bool:
+    """Эвристика: слово похоже на фамилию (не отчество и не инициалы)."""
+    w = token.lower().rstrip(".")
+    if not w or _is_patronymic(w) or _looks_like_initials(token):
+        return False
+    surname_suffixes = (
+        "ов",
+        "ев",
+        "ёв",
+        "ова",
+        "ева",
+        "ёва",
+        "ин",
+        "ина",
+        "ын",
+        "ына",
+        "ий",
+        "ый",
+        "ая",
+        "яя",
+        "ский",
+        "ская",
+        "цкий",
+        "цкая",
+        "енко",
+        "ук",
+        "юк",
+    )
+    return any(w.endswith(suf) and len(w) > len(suf) + 1 for suf in surname_suffixes)
+
+
+def _parse_person_name_parts(parts: list[str]) -> tuple[str, list[str]]:
+    """Разбор ФИО → (фамилия, части для инициалов)."""
+    # И.О. Фамилия  /  Д.Н. Салихов
+    if len(parts) >= 2 and _looks_like_initials(parts[0]):
+        return parts[-1], parts[:-1]
+
+    # Отчество … Фамилия  (в т.ч. «Хизриевна К. Кагерманов»)
+    if len(parts) >= 2 and _is_patronymic(parts[0]) and _looks_like_surname(parts[-1]):
+        middle = [p for p in parts[1:-1] if p]
+        name_parts = (middle + [parts[0]]) if middle else [parts[0]]
+        return parts[-1], name_parts
+
+    # Фамилия Отчество Имя  (часто в педиатрии: «Кагерманов Хизриевна Абдула»)
+    if (
+        len(parts) >= 3
+        and _looks_like_surname(parts[0])
+        and _is_patronymic(parts[1])
+        and not _looks_like_surname(parts[2])
+    ):
+        return parts[0], [parts[2], parts[1]]
+
+    # Имя Отчество Фамилия  /  Дмитрий Николаевич Салихов
+    if len(parts) >= 3 and _is_patronymic(parts[1]) and _looks_like_surname(parts[-1]):
+        return parts[-1], parts[:-1]
+
+    # Фамилия Имя Отчество (по умолчанию)
+    surname = parts[0]
+    name_parts = parts[1:]
+    if _looks_like_initials(surname) and len(parts) >= 2:
+        surname = parts[-1]
+        name_parts = parts[:-1]
+    return surname, name_parts
+
+
 def format_doctor_name(full_name) -> str:
     """Фамилия целиком, имя и отчество — инициалами: «Салихов Д.А.».
 
     Учитывает табельный номер в начале («022201 …»), разделители «/»,
-    и порядок «Имя Отчество Фамилия» / «И.О. Фамилия».
+    порядок «Имя Отчество Фамилия», «Фамилия Отчество Имя» (педиатрия),
+    «Отчество Фамилия» и «И.О. Фамилия».
     """
     if pd.isna(full_name) or full_name == "":
         return "неизвестно"
@@ -81,24 +147,7 @@ def format_doctor_name(full_name) -> str:
     if not parts:
         return "неизвестно"
 
-    # И.О. Фамилия  /  Д.Н. Салихов
-    if len(parts) >= 2 and _looks_like_initials(parts[0]):
-        surname = parts[-1]
-        name_parts = parts[:-1]
-    # Имя Отчество Фамилия  /  Дмитрий Николаевич Салихов
-    elif len(parts) >= 3 and _is_patronymic(parts[1]):
-        surname = parts[-1]
-        name_parts = parts[:-1]
-    else:
-        # Фамилия Имя Отчество  /  Салихов Дмитрий Николаевич
-        surname = parts[0]
-        name_parts = parts[1:]
-
-    # Если «фамилия» всё ещё похожа на инициалы — берём последнее слово
-    if _looks_like_initials(surname) and len(parts) >= 2:
-        surname = parts[-1]
-        name_parts = parts[:-1]
-
+    surname, name_parts = _parse_person_name_parts(parts)
     initials = _initials_from_parts(name_parts)
     if initials:
         return f"{surname} {''.join(initials)}"
@@ -326,7 +375,7 @@ def cases_coverage_by_snils(
         row = {
             "КВС": k,
             "пометка": note,
-            "врач": doc,
+            "врач": format_doctor_name(doc),
             "нарушений": int(viol_counts.get(k, 0)),
         }
         if in_bad and snils_ok:
@@ -375,7 +424,7 @@ def cases_coverage_lists(
         row = {
             "КВС": k,
             "пометка": note,
-            "врач": prow.get("Лечащий врач", ""),
+            "врач": format_doctor_name(prow.get("Лечащий врач", "")),
             "нарушений": int(viol_counts.get(k, 0)),
         }
         if k in bad:
@@ -884,7 +933,7 @@ def analyze_lor(
                     "есть_СНИЛС": _snils_flag(has),
                     "возраст": row["Возраст"],
                     "тип госпитализации": row["Тип госпитализации"],
-                    "врач": row["Лечащий врач"],
+                    "врач": format_doctor_name(row["Лечащий врач"]),
                     "отделение": row.get("Отделение", ""),
                     "тип_нарушения": tip,
                     "нарушение": text_fn(row),
@@ -977,7 +1026,7 @@ def analyze_lor(
                     "есть_СНИЛС": _snils_flag(has),
                     "возраст": row["Возраст"],
                     "тип госпитализации": row["Тип госпитализации"],
-                    "врач": row["Лечащий врач"],
+                    "врач": format_doctor_name(row["Лечащий врач"]),
                     "отделение": row.get("Отделение", ""),
                     "тип_нарушения": tip,
                     "нарушение": text,

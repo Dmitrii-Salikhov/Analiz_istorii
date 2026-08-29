@@ -46,6 +46,11 @@ def test_format_doctor_name():
     assert format_doctor_name("022201 / Белов Дмитрий Геннадьевич") == "Белов Д.Г."
     assert format_doctor_name("022201/ Белов Дмитрий Геннадьевич") == "Белов Д.Г."
     assert format_doctor_name("") == "неизвестно"
+    # педиатрия: «Фамилия Отчество Имя», «Отчество Фамилия», «Отчество И. Фамилия»
+    assert format_doctor_name("Кагерманов Хизриевна Абдула") == "Кагерманов А.Х."
+    assert format_doctor_name("Хизриевна Кагерманов") == "Кагерманов Х."
+    assert format_doctor_name("Хизриевна К. Кагерманов") == "Кагерманов К.Х."
+    assert format_doctor_name("Кагерманов Абдула Хизриевна") == "Кагерманов А.Х."
 
 
 def test_emk_report_basename_and_shares():
