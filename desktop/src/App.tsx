@@ -19,6 +19,11 @@ import {
   type ViolationTypeRow,
 } from './components/ViolationTypeDialog';
 import { copyText, copySelectionFromDocument, formatShortPersonName, opsRowsToCompactCopy } from './lib/clipboard';
+import { fmtNum } from './lib/format';
+import {
+  KSG_CASE_COLUMN_ORDER,
+  normalizeKsgCaseRows,
+} from './lib/ksgCaseTables';
 import { Modal } from './components/Modal';
 import {
   EmkDepartmentScope,
@@ -130,7 +135,23 @@ type KsgAnalysis = {
   high_money?: Record<string, unknown>[];
   no_service?: Record<string, unknown>[];
   kslp_issues?: Record<string, unknown>[];
+  policy_issues?: Record<string, unknown>[];
+  policy_check_enabled?: boolean;
+  policy_check_available?: boolean;
+  total_policy_issues?: number;
+  other_violations?: Record<string, number>;
+  by_department?: Record<string, unknown>[];
   age_dist?: Record<string, number>;
+  department?: string;
+  scope?: EmkScope;
+  departments?: string[];
+  departments_in_scope?: string[];
+  departments_total?: number;
+  period?: string;
+  period_label?: string;
+  periods?: { id: string; label: string }[];
+  source?: 'ksg' | 'other';
+  has_other_services?: boolean;
 };
 
 type ChangelogEntry = {
@@ -191,15 +212,6 @@ function isoFromEmkDate(value: string | null | undefined): string {
   if (!value) return todayIso();
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
   return m ? `${m[1]}-${m[2]}-${m[3]}` : todayIso();
-}
-
-function fmtNum(value: unknown, digits = 0): string {
-  const n = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(n)) return '—';
-  return n.toLocaleString('ru-RU', {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
 }
 
 function Kpi({ title, value }: { title: string; value: string }) {
@@ -275,7 +287,18 @@ export default function App() {
   const [ksgActive, setKsgActive] = useState(0);
   const [ksg, setKsg] = useState<KsgAnalysis | null>(null);
   const [ksgRef, setKsgRef] = useState('');
-  const [ksgSub, setKsgSub] = useState<'doctors' | 'cases' | 'ops' | 'compare'>('doctors');
+  const [ksgSub, setKsgSub] = useState<'doctors' | 'cases' | 'ops' | 'departments' | 'compare'>('doctors');
+  const [ksgDepartments, setKsgDepartments] = useState<string[]>([]);
+  const [ksgDepartment, setKsgDepartment] = useState('');
+  const [ksgScopeMode, setKsgScopeMode] = useState<EmkScopeMode>('summary');
+  const [ksgSummaryMode, setKsgSummaryMode] = useState<EmkSummaryMode>('all');
+  const [ksgSelectedDepartments, setKsgSelectedDepartments] = useState<string[]>([]);
+  const [ksgPeriod, setKsgPeriod] = useState('all');
+  const [ksgPeriods, setKsgPeriods] = useState<{ id: string; label: string }[]>([]);
+  const [ksgSource, setKsgSource] = useState<'ksg' | 'other'>('ksg');
+  const [ksgHasOther, setKsgHasOther] = useState(false);
+  const [ksgCompareMode, setKsgCompareMode] = useState<'months' | 'departments'>('months');
+  const [ksgCompareDepartments, setKsgCompareDepartments] = useState<string[]>([]);
   const [opsFile, setOpsFile] = useState<string | null>(null);
   const [ops, setOps] = useState<OpsAnalysis | null>(null);
   const [opsDepartments, setOpsDepartments] = useState<string[]>([]);
@@ -322,6 +345,12 @@ export default function App() {
                 emk_scope_mode: emkScopeMode,
                 emk_summary_mode: emkSummaryMode,
                 emk_selected_departments: emkSelectedDepartments,
+                ksg_scope_mode: ksgScopeMode,
+                ksg_summary_mode: ksgSummaryMode,
+                ksg_selected_departments: ksgSelectedDepartments,
+                ksg_period: ksgPeriod,
+                ksg_source: ksgSource,
+                ksg_compare_mode: ksgCompareMode,
                 ops_scope_mode: opsScopeMode,
                 ops_summary_mode: opsSummaryMode,
                 ops_selected_departments: opsSelectedDepartments,
@@ -346,10 +375,23 @@ export default function App() {
     emkScopeMode,
     emkSummaryMode,
     emkSelectedDepartments,
+    ksgScopeMode,
+    ksgSummaryMode,
+    ksgSelectedDepartments,
+    ksgPeriod,
+    ksgSource,
+    ksgCompareMode,
     opsScopeMode,
     opsSummaryMode,
     opsSelectedDepartments,
   ]);
+
+  useEffect(() => {
+    if (ksgScopeMode === 'single' && ksgCompareMode === 'departments') {
+      setKsgCompareMode('months');
+      setCompare(null);
+    }
+  }, [ksgScopeMode, ksgCompareMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -379,7 +421,7 @@ export default function App() {
         if (prefs?.emk_sub && (emkSubs as readonly string[]).includes(prefs.emk_sub)) {
           setEmkSub(prefs.emk_sub as typeof emkSubs[number]);
         }
-        const ksgSubs = ['doctors', 'cases', 'ops', 'compare'] as const;
+        const ksgSubs = ['doctors', 'cases', 'ops', 'departments', 'compare'] as const;
         if (prefs?.ksg_sub && (ksgSubs as readonly string[]).includes(prefs.ksg_sub)) {
           setKsgSub(prefs.ksg_sub as typeof ksgSubs[number]);
         }
@@ -407,6 +449,24 @@ export default function App() {
         }
         if (Array.isArray(prefs?.ops_selected_departments)) {
           setOpsSelectedDepartments(prefs.ops_selected_departments.filter(Boolean));
+        }
+        if (prefs?.ksg_scope_mode === 'single' || prefs?.ksg_scope_mode === 'summary') {
+          setKsgScopeMode(prefs.ksg_scope_mode);
+        }
+        if (prefs?.ksg_summary_mode === 'all' || prefs?.ksg_summary_mode === 'multi') {
+          setKsgSummaryMode(prefs.ksg_summary_mode);
+        }
+        if (Array.isArray(prefs?.ksg_selected_departments)) {
+          setKsgSelectedDepartments(prefs.ksg_selected_departments.filter(Boolean));
+        }
+        if (typeof prefs?.ksg_period === 'string' && prefs.ksg_period) {
+          setKsgPeriod(prefs.ksg_period);
+        }
+        if (prefs?.ksg_source === 'other' || prefs?.ksg_source === 'ksg') {
+          setKsgSource(prefs.ksg_source);
+        }
+        if (prefs?.ksg_compare_mode === 'months' || prefs?.ksg_compare_mode === 'departments') {
+          setKsgCompareMode(prefs.ksg_compare_mode);
         }
         prefsReady.current = true;
         try {
@@ -619,6 +679,76 @@ export default function App() {
     [runEmkAnalyze],
   );
 
+  const runKsgAnalyze = useCallback(
+    async (overrides?: {
+      scope?: EmkScope;
+      scopeMode?: EmkScopeMode;
+      summaryMode?: EmkSummaryMode;
+      department?: string;
+      departments?: string[];
+      period?: string;
+      source?: 'ksg' | 'other';
+    }) => {
+      if (!ksgFiles.length) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const scopeMode = overrides?.scopeMode ?? ksgScopeMode;
+        const summaryMode = overrides?.summaryMode ?? ksgSummaryMode;
+        let scope: EmkScope = overrides?.scope ?? 'all';
+        let department = overrides?.department ?? ksgDepartment;
+        let departments = overrides?.departments ?? ksgSelectedDepartments;
+        if (scopeMode === 'single') {
+          scope = 'single';
+          department = overrides?.department ?? ksgDepartment;
+        } else if (summaryMode === 'all') {
+          scope = 'all';
+        } else {
+          scope = 'multi';
+          departments = overrides?.departments ?? ksgSelectedDepartments;
+        }
+        const period = overrides?.period ?? ksgPeriod;
+        const source = overrides?.source ?? ksgSource;
+        const res = await rpc<{ analysis: KsgAnalysis }>('ksg.analyze', {
+          scope,
+          department,
+          departments,
+          period,
+          source,
+        });
+        setKsg(res.analysis);
+        if (res.analysis.departments?.length) {
+          setKsgDepartments(res.analysis.departments);
+          setDeptOptions((prev) => {
+            const merged = [...prev];
+            for (const d of res.analysis.departments || []) {
+              if (d && !merged.includes(d)) merged.push(d);
+            }
+            return merged;
+          });
+        }
+        if (res.analysis.periods?.length) setKsgPeriods(res.analysis.periods);
+        if (typeof res.analysis.has_other_services === 'boolean') {
+          setKsgHasOther(res.analysis.has_other_services);
+        }
+        setCompare(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [
+      ksgFiles.length,
+      ksgScopeMode,
+      ksgSummaryMode,
+      ksgDepartment,
+      ksgSelectedDepartments,
+      ksgPeriod,
+      ksgSource,
+    ],
+  );
+
   const loadKsgFromPaths = useCallback(async (list: string[]) => {
     if (!list.length) return;
     setError(null);
@@ -637,6 +767,10 @@ export default function App() {
           active: number;
           reference_status: string;
           analysis: KsgAnalysis;
+          departments?: string[];
+          preferred_department?: string;
+          periods?: { id: string; label: string }[];
+          has_other_services?: boolean;
           profile_id?: string;
           profile_name?: string;
           mapping?: ColumnMapping;
@@ -647,6 +781,28 @@ export default function App() {
         lastAnalysis = res.analysis;
         lastProfile = res.profile_name;
         lastMapping = res.mapping;
+        if (res.departments?.length) {
+          setKsgDepartments(res.departments);
+          setDeptOptions((prev) => {
+            const merged = [...prev];
+            for (const d of res.departments || []) {
+              if (d && !merged.includes(d)) merged.push(d);
+            }
+            return merged;
+          });
+        }
+        if (res.preferred_department) setKsgDepartment(res.preferred_department);
+        if (res.periods?.length) {
+          setKsgPeriods(res.periods);
+          setKsgPeriod(res.periods.length === 1 ? res.periods[0].id : 'all');
+        } else {
+          setKsgPeriod('all');
+        }
+        setKsgScopeMode('summary');
+        setKsgSummaryMode('all');
+        setKsgSource('ksg');
+        setKsgHasOther(!!res.has_other_services);
+        setKsgCompareDepartments(res.departments || []);
       }
       setKsgFiles(files);
       setKsgActive(active);
@@ -875,17 +1031,31 @@ export default function App() {
   }, [ksgFiles.length]);
 
   const runCompare = useCallback(async () => {
-    const indices = compareIndices.length
-      ? compareIndices
-      : ksgFiles.map((_, i) => i);
-    if (indices.length < 2) {
-      setError('Для сравнения выберите минимум 2 файла КСГ');
-      return;
-    }
     setBusy(true);
     setError(null);
     try {
-      const res = await rpc<CompareResult>('ksg.compare', { indices });
+      if (ksgCompareMode === 'departments') {
+        const departments = ksgCompareDepartments;
+        if (departments.length < 2) {
+          setError('Для сравнения отделений выберите минимум 2');
+          return;
+        }
+        const res = await rpc<CompareResult>('ksg.compare', {
+          mode: 'departments',
+          departments,
+          period: ksgPeriod,
+          source: ksgSource,
+        });
+        setCompare(res);
+        setKsgSub('compare');
+        return;
+      }
+      const indices = compareIndices.length ? compareIndices : ksgFiles.map((_, i) => i);
+      if (indices.length < 2) {
+        setError('Для сравнения выберите минимум 2 файла КСГ');
+        return;
+      }
+      const res = await rpc<CompareResult>('ksg.compare', { indices, mode: 'months' });
       setCompare(res);
       setKsgSub('compare');
     } catch (e) {
@@ -893,7 +1063,15 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }, [compareIndices, ksgFiles]);
+  }, [
+    compareIndices,
+    ksgFiles,
+    ksgCompareMode,
+    ksgCompareDepartments,
+    ksgDepartments,
+    ksgPeriod,
+    ksgSource,
+  ]);
 
   const copySummary = useCallback(async () => {
     const lines: string[] = [];
@@ -919,11 +1097,17 @@ export default function App() {
     } else if (tab === 'ksg' && ksg) {
       lines.push('Сводка КСГ');
       lines.push(`Файл: ${ksgFiles[ksgActive]?.label || ksgFiles[ksgActive]?.name || '—'}`);
+      if (ksg.department) lines.push(`Отделение: ${ksg.department}`);
+      if (ksg.period_label) lines.push(`Период: ${ksg.period_label}`);
+      if (ksg.source === 'other') lines.push('Источник: др. услуги');
       lines.push(`Пациенты: ${fmtNum(ksg.total_patients)}`);
       lines.push(`Сумма: ${fmtNum(ksg.total_sum, 0)}`);
       lines.push(`Средний КЗ: ${fmtNum(ksg.avg_kz_total, 3)}`);
       lines.push(`Без услуги: ${fmtNum(ksg.no_service?.length)}`);
       lines.push(`КСЛП: ${fmtNum(ksg.kslp_issues?.length)}`);
+      if (ksg.policy_check_enabled) {
+        lines.push(`Полис / СМО: ${fmtNum(ksg.policy_issues?.length ?? ksg.total_policy_issues)}`);
+      }
     } else if (tab === 'ops' && ops) {
       lines.push('Сводка операций');
       lines.push(`Файл: ${ops.file_name || opsFile || '—'}`);
@@ -1142,6 +1326,12 @@ export default function App() {
       await api().openPath(res.path);
     },
     [tab, emk, ksgFiles, ksgActive],
+  );
+
+  const ksgCaseRows = useCallback(
+    (rows: Record<string, unknown>[] | undefined) =>
+      normalizeKsgCaseRows(rows || []),
+    [],
   );
 
   const emkShow = useCallback(
@@ -1771,19 +1961,137 @@ export default function App() {
                 className="btn"
                 type="button"
                 disabled={busy || !ksgFiles.length}
-                title="Пересчитать анализ активного файла КСГ"
-                onClick={() => void reanalyzeKsg()}
+                title="Пересчитать анализ с текущими фильтрами"
+                onClick={() => void runKsgAnalyze()}
               >
                 Пересчитать
               </button>
+              {ksgPeriods.length > 0 && (
+                <label className="toolbar-field">
+                  <span className="muted">Период</span>
+                  <select
+                    value={ksgPeriod}
+                    disabled={busy}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setKsgPeriod(value);
+                      void runKsgAnalyze({ period: value });
+                    }}
+                  >
+                    <option value="all">Весь период</option>
+                    {ksgPeriods.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {ksgHasOther && (
+                <div className="subtabs sub-tabs-inline">
+                  {(
+                    [
+                      ['ksg', 'КСГ'],
+                      ['other', 'Др. услуги'],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`chip ${ksgSource === id ? 'active' : ''}`}
+                      disabled={busy}
+                      onClick={() => {
+                        setKsgSource(id);
+                        void runKsgAnalyze({ source: id });
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {ksgDepartments.length > 0 && (
+                <EmkDepartmentScope
+                  radioName="ksg-summary-mode"
+                  departments={ksgDepartments}
+                  singleDepartment={ksgDepartment}
+                  onSingleDepartmentChange={(value) => {
+                    setKsgDepartment(value);
+                    void runKsgAnalyze({ scopeMode: 'single', department: value, scope: 'single' });
+                  }}
+                  scopeMode={ksgScopeMode}
+                  onScopeModeChange={(mode) => {
+                    setKsgScopeMode(mode);
+                    if (mode === 'single') {
+                      if (ksgCompareMode === 'departments') {
+                        setKsgCompareMode('months');
+                        setCompare(null);
+                      }
+                      if (ksgDepartment) {
+                        void runKsgAnalyze({ scopeMode: 'single', department: ksgDepartment, scope: 'single' });
+                      }
+                    } else {
+                      void runKsgAnalyze({
+                        scopeMode: 'summary',
+                        summaryMode: ksgSummaryMode,
+                        scope: ksgSummaryMode === 'all' ? 'all' : 'multi',
+                        departments: ksgSelectedDepartments,
+                      });
+                    }
+                  }}
+                  summaryMode={ksgSummaryMode}
+                  onSummaryModeChange={(mode) => {
+                    setKsgSummaryMode(mode);
+                    if (mode === 'all') {
+                      void runKsgAnalyze({ scopeMode: 'summary', summaryMode: 'all', scope: 'all' });
+                    }
+                  }}
+                  selectedDepartments={ksgSelectedDepartments}
+                  onSelectedDepartmentsChange={setKsgSelectedDepartments}
+                  disabled={busy}
+                  onApply={() =>
+                    void runKsgAnalyze({
+                      scopeMode: 'summary',
+                      summaryMode: ksgSummaryMode,
+                      scope: ksgSummaryMode === 'all' ? 'all' : 'multi',
+                      departments: ksgSelectedDepartments,
+                    })
+                  }
+                />
+              )}
+              <label className="toolbar-field">
+                <span className="muted">Сравнение</span>
+                <select
+                  value={ksgCompareMode}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setKsgCompareMode(e.target.value as 'months' | 'departments');
+                    setCompare(null);
+                  }}
+                >
+                  <option value="months">Месяцы / файлы</option>
+                  {ksgScopeMode === 'summary' && (
+                    <option value="departments">Отделения</option>
+                  )}
+                </select>
+              </label>
               <button
                 className="btn"
                 type="button"
-                disabled={busy || compareIndices.length < 2}
-                title="Сравнить отмеченные месяцы (нужно выбрать ≥ 2)"
+                disabled={
+                  busy
+                  || (ksgCompareMode === 'months'
+                    ? compareIndices.length < 2
+                    : ksgScopeMode !== 'summary' || ksgCompareDepartments.length < 2)
+                }
+                title={
+                  ksgCompareMode === 'months'
+                    ? 'Сравнить отмеченные месяцы (≥ 2 файла)'
+                    : 'Сравнить отделения в текущем файле (≥ 2)'
+                }
                 onClick={() => void runCompare()}
               >
-                Сравнить месяцы
+                {ksgCompareMode === 'months' ? 'Сравнить месяцы' : 'Сравнить отделения'}
               </button>
               <button
                 className="btn"
@@ -1823,7 +2131,7 @@ export default function App() {
               </div>
             )}
 
-            {ksgFiles.length >= 2 && (
+            {ksgCompareMode === 'months' && ksgFiles.length >= 2 && (
               <div className="compare-pick">
                 <span className="muted">Сравнивать:</span>
                 {ksgFiles.map((f, i) => {
@@ -1857,13 +2165,79 @@ export default function App() {
               </div>
             )}
 
+            {ksgScopeMode === 'summary'
+              && ksgCompareMode === 'departments'
+              && ksgDepartments.length >= 2 && (
+              <div className="compare-pick">
+                <div className="compare-pick__head">
+                  <span className="muted">Отделения:</span>
+                  <span className="muted compare-pick__count">
+                    Отмечено: {ksgCompareDepartments.length} из {ksgDepartments.length}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost compare-pick__action"
+                    disabled={busy || ksgCompareDepartments.length === ksgDepartments.length}
+                    title="Отметить все отделения для сравнения"
+                    onClick={() => {
+                      setKsgCompareDepartments([...ksgDepartments]);
+                      setCompare(null);
+                    }}
+                  >
+                    Выбрать все
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost compare-pick__action"
+                    disabled={busy || ksgCompareDepartments.length === 0}
+                    title="Снять отметку со всех отделений"
+                    onClick={() => {
+                      setKsgCompareDepartments([]);
+                      setCompare(null);
+                    }}
+                  >
+                    Снять все
+                  </button>
+                </div>
+                <div className="compare-pick__list">
+                {ksgDepartments.map((dep) => {
+                  const on = ksgCompareDepartments.includes(dep);
+                  return (
+                    <label key={dep} className="compare-pick__item" title={dep}>
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        disabled={busy}
+                        onChange={() => {
+                          setKsgCompareDepartments((prev) => {
+                            if (prev.includes(dep)) return prev.filter((x) => x !== dep);
+                            return [...prev, dep];
+                          });
+                          setCompare(null);
+                        }}
+                      />
+                      {dep.length > 36 ? `${dep.slice(0, 33)}…` : dep}
+                    </label>
+                  );
+                })}
+                </div>
+              </div>
+            )}
+
             {!ksg ? (
               <div className="empty">
                 <h2>Анализ КСГ</h2>
-                <p>Загрузите один или несколько месячных отчётов КСГ или перетащите файлы сюда.</p>
+                <p>Загрузите общий реестр стационара или помесячный отчёт КСГ.</p>
               </div>
             ) : (
               <>
+                {(ksg.department || ksg.period_label) && (
+                  <p className="muted scope-hint">
+                    {ksg.department ? <>Отделение: <strong>{ksg.department}</strong></> : null}
+                    {ksg.period_label ? <> · Период: <strong>{ksg.period_label}</strong></> : null}
+                    {ksg.source === 'other' ? <> · <strong>Др. услуги</strong></> : null}
+                  </p>
+                )}
                 <div className="kpi-grid">
                   {ksgShow('kpi_patients') && (
                     <Kpi title="Пациенты" value={fmtNum(ksg.total_patients)} />
@@ -1880,15 +2254,19 @@ export default function App() {
                   {ksgShow('kpi_kslp') && (
                     <Kpi title="КСЛП" value={fmtNum(ksg.kslp_issues?.length)} />
                   )}
+                  {ksg.policy_check_enabled && ksgShow('kpi_policy_smo') && (
+                    <Kpi title="Полис / СМО" value={fmtNum(ksg.policy_issues?.length ?? ksg.total_policy_issues)} />
+                  )}
                 </div>
 
                 <div className="subtabs">
                   {(
                     [
                       ['doctors', 'Суммы по врачам', 'section_doctors', 'Суммы оплаты по врачам'],
-                      ['cases', 'Случаи', 'section_cases', 'Дешёвые, дорогие случаи и КСЛП'],
+                      ['cases', 'Случаи', 'section_cases', 'Дешёвые, дорогие случаи, КСЛП и полис/СМО'],
                       ['ops', 'Операции', 'section_ops', 'Сводка операций в отчёте КСГ'],
-                      ['compare', 'Сравнение', 'section_compare', 'Сравнение показателей по месяцам'],
+                      ['departments', 'По отделениям', 'section_departments', 'KPI по отделениям стационара'],
+                      ['compare', 'Сравнение', 'section_compare', 'Сравнение месяцев или отделений'],
                     ] as const
                   )
                     .filter(([, , key]) => ksgShow(key))
@@ -1922,11 +2300,25 @@ export default function App() {
                   {ksgSub === 'cases' && (
                     <>
                       <h3>Дешёвые случаи</h3>
-                      <DataTable rows={ksg.low_money || []} />
+                      <DataTable
+                        rows={ksgCaseRows(ksg.low_money)}
+                        columnOrder={KSG_CASE_COLUMN_ORDER}
+                        sortColumn="Сумма к оплате"
+                      />
                       <h3 style={{ marginTop: 16 }}>Дорогие случаи</h3>
-                      <DataTable rows={ksg.high_money || []} />
+                      <DataTable
+                        rows={ksgCaseRows(ksg.high_money)}
+                        columnOrder={KSG_CASE_COLUMN_ORDER}
+                        sortColumn="Сумма к оплате"
+                      />
                       <h3 style={{ marginTop: 16 }}>КСЛП</h3>
                       <DataTable rows={ksg.kslp_issues || []} />
+                      {ksg.policy_check_enabled && (
+                        <>
+                          <h3 style={{ marginTop: 16 }}>Полис / СМО</h3>
+                          <DataTable rows={ksg.policy_issues || []} />
+                        </>
+                      )}
                     </>
                   )}
                   {ksgSub === 'ops' && (
@@ -1940,8 +2332,21 @@ export default function App() {
                       )}
                     </>
                   )}
-                  {ksgSub === 'compare' &&
-                    (compare ? (
+                  {ksgSub === 'departments' && (
+                    <>
+                      <BarChart
+                        items={(ksg.by_department || []).map((row) => ({
+                          label: String(row['Отделение'] ?? ''),
+                          value: Number(row['Сумма'] ?? 0),
+                        }))}
+                      />
+                      <div style={{ marginTop: 12 }}>
+                        <DataTable rows={ksg.by_department || []} />
+                      </div>
+                    </>
+                  )}
+                  {ksgSub === 'compare'
+                    && (compare ? (
                       <KsgComparePanel
                         compare={compare}
                         chartsOn={compareCharts}
@@ -1949,7 +2354,9 @@ export default function App() {
                       />
                     ) : (
                       <div className="muted">
-                        Отметьте месяцы выше и нажмите «Сравнить месяцы» (нужно ≥ 2).
+                        {ksgCompareMode === 'months'
+                          ? 'Отметьте месяцы выше и нажмите «Сравнить месяцы» (нужно ≥ 2).'
+                          : 'Отметьте отделения и нажмите «Сравнить отделения» (нужно ≥ 2).'}
                       </div>
                     ))}
                 </div>

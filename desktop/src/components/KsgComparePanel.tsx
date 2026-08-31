@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { fmtNum } from '../lib/format';
 import { BarChart } from './BarChart';
 import { DataTable } from './DataTable';
 
@@ -34,15 +35,6 @@ const CHARTS: { id: ChartId; label: string; color?: string }[] = [
 const DROP_RATIO = 0.85;
 /** Rise vs previous month ≥ 20% */
 const RISE_RATIO = 1.2;
-
-function fmtNum(value: unknown, digits = 0): string {
-  const n = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(n)) return '—';
-  return n.toLocaleString('ru-RU', {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
 
 function mean(nums: number[]): number {
   if (!nums.length) return 0;
@@ -159,12 +151,11 @@ export function KsgComparePanel({
   };
 
   const totalsCellClass = (
-    _row: Record<string, unknown>,
+    row: Record<string, unknown>,
     col: string,
-    rowIndex: number,
   ): string | undefined => {
     if (col === 'Показатель' || col === 'Итого') return undefined;
-    const meta = totalsMeta[rowIndex];
+    const meta = totalsMeta.find((m) => m.row['Показатель'] === row['Показатель']);
     if (!meta) return undefined;
     const mi = labels.indexOf(col);
     if (mi <= 0) return undefined;

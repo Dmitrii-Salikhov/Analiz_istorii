@@ -1,0 +1,29 @@
+.sort-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sort-controls__btn {
+  min-width: 34px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.sort-controls__btn:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.sort-controls__btn--active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-input));
+  font-weight: 600;
+}

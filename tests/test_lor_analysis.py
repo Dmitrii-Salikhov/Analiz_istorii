@@ -53,6 +53,14 @@ def test_format_doctor_name():
     assert format_doctor_name("Кагерманов Абдула Хизриевна") == "Кагерманов А.Х."
 
 
+def test_format_patient_name():
+    from lor_analysis import format_patient_name
+
+    assert format_patient_name("Иванов Иван Иванович") == "Иванов И.И."
+    assert format_patient_name("P.FAM+P.IM+P.OT") == "неизвестно"
+    assert format_patient_name("") == "неизвестно"
+
+
 def test_emk_report_basename_and_shares():
     from datetime import date
 

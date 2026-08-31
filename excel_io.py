@@ -76,6 +76,12 @@ class ExcelLoadResult:
     emk_variant: str | None = None  # "discharged" | "current" for EMK loads
 
 
+@dataclass(frozen=True)
+class KsgWorkbookLoadResult:
+    ksg: ExcelLoadResult
+    other_services: ExcelLoadResult | None = None
+
+
 def clean_column_name(col) -> str:
     return re.sub(r"\s+", " ", str(col)).strip()
 
@@ -206,6 +212,7 @@ def load_excel_with_header(
     profile_name: str = "",
     progress: Callable[[str, float], None] | None = None,
     max_scan_rows: int = 80,
+    preferred_sheets: Sequence[str] | None = None,
 ) -> ExcelLoadResult:
     """
     Ищет строку заголовков по ключевым словам на каждом листе,
@@ -225,6 +232,10 @@ def load_excel_with_header(
     sheets = list(xls.sheet_names)
     if not sheets:
         raise ExcelParseError("В книге нет листов.")
+    if preferred_sheets:
+        ordered = [s for s in preferred_sheets if s in sheets]
+        ordered.extend(s for s in sheets if s not in ordered)
+        sheets = ordered
 
     # Expand fragments with alias synonyms for header search
     search_frags = list(required_fragments)
@@ -449,6 +460,7 @@ def _load_typed_excel(
     default_profile: Mapping[str, Any],
     kind_key: str,
     after_load: Callable[[ExcelLoadResult], ExcelLoadResult] | None = None,
+    preferred_sheets: Sequence[str] | None = None,
 ) -> ExcelLoadResult:
     prof = dict(profile) if profile else (
         get_active_profile(dict(config or {}), kind_key)
@@ -468,6 +480,7 @@ def _load_typed_excel(
             profile_id=str(prof.get("id") or "default"),
             profile_name=str(prof.get("name") or ""),
             progress=progress,
+            preferred_sheets=preferred_sheets,
         )
         if after_load is not None:
             result = after_load(result)
@@ -534,27 +547,79 @@ def load_ksg_excel(
     progress=None,
     profile: Mapping[str, Any] | None = None,
     config: Mapping[str, Any] | None = None,
+    *,
+    preferred_sheets: Sequence[str] | None = None,
 ) -> ExcelLoadResult:
+    from ksg_departments import normalize_ksg_departments
+
     def _require_dates(result: ExcelLoadResult) -> ExcelLoadResult:
-        df = result.dataframe
+        df = normalize_ksg_departments(result.dataframe)
         if "Поступление" not in df.columns and "Выписка" not in df.columns:
             raise MissingColumnsError(
                 ["Поступление или Выписка"],
                 found=list(df.columns),
                 unmatched=(result.mapping.unused_headers if result.mapping else []),
             )
-        return result
+        return ExcelLoadResult(
+            dataframe=df,
+            sheet_name=result.sheet_name,
+            header_row=result.header_row,
+            file_path=result.file_path,
+            mapping=result.mapping,
+        )
 
-    return _load_typed_excel(
+    prof = dict(profile) if profile else (
+        get_active_profile(dict(config or {}), "ksg")
+        if config is not None
+        else deepcopy_profile(DEFAULT_KSG_PROFILE)
+    )
+
+    def _load_with_profile(sheets: Sequence[str] | None) -> ExcelLoadResult:
+        return _load_typed_excel(
+            file_path,
+            expected_kind="ksg",
+            progress=progress,
+            profile=prof,
+            config=config,
+            default_profile=DEFAULT_KSG_PROFILE,
+            kind_key="ksg",
+            after_load=_require_dates,
+            preferred_sheets=sheets,
+        )
+
+    try:
+        return _load_with_profile(preferred_sheets)
+    except ExcelParseError:
+        if preferred_sheets:
+            return _load_with_profile(None)
+        raise
+
+
+def load_ksg_workbook(
+    file_path: str,
+    progress=None,
+    profile: Mapping[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
+) -> KsgWorkbookLoadResult:
+    ksg = load_ksg_excel(
         file_path,
-        expected_kind="ksg",
         progress=progress,
         profile=profile,
         config=config,
-        default_profile=DEFAULT_KSG_PROFILE,
-        kind_key="ksg",
-        after_load=_require_dates,
+        preferred_sheets=("КСГ",),
     )
+    other: ExcelLoadResult | None = None
+    try:
+        other = load_ksg_excel(
+            file_path,
+            progress=progress,
+            profile=profile,
+            config=config,
+            preferred_sheets=("Др. услуги", "Др услуги", "Другие услуги"),
+        )
+    except ExcelParseError:
+        other = None
+    return KsgWorkbookLoadResult(ksg=ksg, other_services=other)
 
 
 def load_ops_excel(

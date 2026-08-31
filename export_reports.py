@@ -200,13 +200,20 @@ def export_ksg_txt(
     *,
     file_name: str,
     settings: Mapping[str, Any] | None = None,
+    department: str = "",
+    period_label: str = "",
 ) -> str:
     out = Path(path)
     r = results
     settings = settings or {}
     with out.open("w", encoding="utf-8") as f:
         f.write(f"Отчёт сформирован: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n")
-        f.write(f"Исходный файл: {file_name}\n\n")
+        f.write(f"Исходный файл: {file_name}\n")
+        if department:
+            f.write(f"Отделение: {department}\n")
+        if period_label:
+            f.write(f"Период: {period_label}\n")
+        f.write("\n")
         f.write(f"Общее количество пациентов: {r['total_patients']}\n")
         f.write("Пациенты по врачам:\n")
         f.write(r["patient_counts"].to_string(index=False) + "\n\n")
@@ -224,6 +231,9 @@ def export_ksg_txt(
         if not r["kslp_issues"].empty:
             f.write("Нарушения КСЛП:\n")
             f.write(r["kslp_issues"].to_string(index=False) + "\n\n")
+        if not r.get("policy_issues", pd.DataFrame()).empty:
+            f.write("Полис / СМО:\n")
+            f.write(r["policy_issues"].to_string(index=False) + "\n\n")
         f.write("Средний КЗ:\n")
         f.write(r["avg_kz_doctor"].to_string(index=False) + "\n")
         f.write(f"Средний по отделению: {r['avg_kz_total']}\n")
@@ -235,16 +245,21 @@ def export_ksg_excel(
     results: dict[str, Any],
     *,
     file_name: str,
+    department: str = "",
+    period_label: str = "",
 ) -> str:
     out = Path(path)
     r = results
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
-        meta = pd.DataFrame(
-            {
-                "Параметр": ["Дата", "Файл"],
-                "Значение": [datetime.now().strftime("%d.%m.%Y %H:%M"), file_name],
-            }
-        )
+        meta_rows = [
+            ("Дата", datetime.now().strftime("%d.%m.%Y %H:%M")),
+            ("Файл", file_name),
+        ]
+        if department:
+            meta_rows.append(("Отделение", department))
+        if period_label:
+            meta_rows.append(("Период", period_label))
+        meta = pd.DataFrame({"Параметр": [x[0] for x in meta_rows], "Значение": [x[1] for x in meta_rows]})
         meta.to_excel(writer, sheet_name="Метаданные", index=False)
         auto_adjust_excel_columns(writer, "Метаданные", meta)
         r["patient_counts"].to_excel(writer, sheet_name="Пациенты по врачам", index=False)
@@ -264,8 +279,16 @@ def export_ksg_excel(
         if not r["kslp_issues"].empty:
             r["kslp_issues"].to_excel(writer, sheet_name="КСЛП нарушения", index=False)
             auto_adjust_excel_columns(writer, "КСЛП нарушения", r["kslp_issues"])
+        policy_issues = r.get("policy_issues")
+        if policy_issues is not None and isinstance(policy_issues, pd.DataFrame) and not policy_issues.empty:
+            policy_issues.to_excel(writer, sheet_name="Полис и СМО", index=False)
+            auto_adjust_excel_columns(writer, "Полис и СМО", policy_issues)
         r["avg_kz_doctor"].to_excel(writer, sheet_name="Средний КЗ", index=False)
         auto_adjust_excel_columns(writer, "Средний КЗ", r["avg_kz_doctor"])
+        by_dep = r.get("by_department")
+        if by_dep is not None and isinstance(by_dep, pd.DataFrame) and not by_dep.empty:
+            by_dep.to_excel(writer, sheet_name="По отделениям", index=False)
+            auto_adjust_excel_columns(writer, "По отделениям", by_dep)
     return str(out.resolve())
 
 

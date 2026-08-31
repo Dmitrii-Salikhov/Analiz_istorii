@@ -48,6 +48,92 @@ def test_analyze_ksg_thresholds_and_totals():
     assert result["total_sum"] == 190000.0
 
 
+def test_low_high_money_include_service_column():
+    settings = {
+        "date_format": "dayfirst",
+        "ksg_threshold_low": 20000,
+        "ksg_threshold_high": 100000,
+        "kslp_age_min": 0,
+        "kslp_age_max": 4,
+        "kslp_senior_age": 75,
+        "kslp_operations_codes": [],
+    }
+    ref = build_default_reference()
+    df = pd.DataFrame(
+        [
+            _ksg_row(**{"№ талона": "T-low", "Сумма к оплате": "15000", "Код услуги": "A16.08.013.001"}),
+            _ksg_row(
+                **{
+                    "№ талона": "T-high",
+                    "Сумма к оплате": "150000",
+                    "Код услуги": "",
+                }
+            ),
+        ]
+    )
+    result = analyze_ksg(df, ref, settings)
+    assert "Услуга" in result["low_money"].columns
+    low_svc = result["low_money"].iloc[0]["Услуга"]
+    assert "A16.08.013.001" in str(low_svc)
+    assert "Услуга отсутствует" not in str(low_svc)
+    assert result["high_money"].iloc[0]["Услуга"] == "Услуга отсутствует"
+
+
+def test_format_ksg_case_frame_always_has_service_column():
+    from ksg_analysis import _format_ksg_case_frame
+
+    frame = _format_ksg_case_frame(
+        pd.DataFrame(
+            [
+                {
+                    "№ талона": "T1",
+                    "Врач": "Иванов Иван Иванович",
+                    "Сумма к оплате": 1000,
+                }
+            ]
+        )
+    )
+    assert "Услуга" in frame.columns
+    assert frame.iloc[0]["Услуга"] == "Услуга отсутствует"
+
+
+def test_analyze_ksg_includes_patient_fio_in_case_tables():
+    settings = {
+        "date_format": "dayfirst",
+        "ksg_threshold_low": 20000,
+        "ksg_threshold_high": 100000,
+        "kslp_age_min": 0,
+        "kslp_age_max": 4,
+        "kslp_senior_age": 75,
+        "kslp_operations_codes": [],
+    }
+    df = pd.DataFrame(
+        [
+            _ksg_row(
+                **{
+                    "№ талона": "T-low",
+                    "Сумма к оплате": "15000",
+                    "ФИО пациента": "Петров Пётр Петрович",
+                }
+            ),
+            _ksg_row(
+                **{
+                    "№ талона": "T-kslp",
+                    "ФИО пациента": "Сидорова Анна Сергеевна",
+                    "Дата рождения": "01.01.2023",
+                    "Поступление": "01.06.2026",
+                    "КСЛП итоговый": "0",
+                }
+            ),
+        ]
+    )
+    result = analyze_ksg(df, build_default_reference(), settings)
+    assert "ФИО пациента" in result["low_money"].columns
+    assert result["low_money"].iloc[0]["ФИО пациента"] == "Петров П.П."
+    assert "ФИО пациента" in result["kslp_issues"].columns
+    assert result["kslp_issues"].iloc[0]["ФИО пациента"] == "Сидорова А.С."
+
+
 def test_kslp_child_requires_nonzero():
     settings = {
         "date_format": "dayfirst",
@@ -188,7 +274,61 @@ def test_build_month_comparison_sorts_ascending():
     assert "А" in cmp["doctors"] and "Б" in cmp["doctors"]
 
 
-def test_build_month_comparison_subset_two_of_three():
+def test_analyze_ksg_with_department_uses_profile():
+    from ksg_kslp_profiles import BUILTIN_LOR
+
+    settings = {
+        "date_format": "dayfirst",
+        "ksg_threshold_low": 20000,
+        "ksg_threshold_high": 100000,
+        "ksg_department_profiles": {"Терапевтия": "standard", "ЛОР": BUILTIN_LOR},
+        "ksg_kslp_profiles": {
+            BUILTIN_LOR: {
+                "id": BUILTIN_LOR,
+                "mode": "rules",
+                "rules": [{"id": "r1", "name": "Ops", "codes": ["A16.08.010.003"]}],
+                "age_min": 0,
+                "age_max": 4,
+                "senior_age": 75,
+            },
+            "standard": {"id": "standard", "mode": "age_only", "age_min": 0, "age_max": 4, "senior_age": 75, "rules": []},
+        },
+    }
+    df = pd.DataFrame(
+        [
+            _ksg_row(**{"Отделение": "ЛОР", "Код услуги": "A16.08.010.003", "КСЛП итоговый": "0"}),
+            _ksg_row(**{"№ талона": "T2", "Отделение": "Терапевтия", "Код услуги": "A16.08.010.003", "КСЛП итоговый": "0"}),
+        ]
+    )
+    result = analyze_ksg(df, build_default_reference(), settings)
+    assert result["total_kslp_issues"] == 1
+    assert not result["by_department"].empty
+
+
+def test_build_department_comparison():
+    from ksg_analysis import build_department_comparison
+
+    item = {
+        "df_ksg": pd.DataFrame(
+            [
+                _ksg_row(**{"Отделение": "ЛОР", "№ талона": "A"}),
+                _ksg_row(**{"Отделение": "Терапевтия", "№ талона": "B", "Врач": "Доктор Б"}),
+            ]
+        ),
+        "departments": ["ЛОР", "Терапевтия"],
+    }
+    settings = {"date_format": "dayfirst", "ksg_threshold_low": 20000, "ksg_threshold_high": 100000}
+    summary = build_department_comparison(
+        item,
+        departments=["ЛОР", "Терапевтия"],
+        period="all",
+        source="ksg",
+        reference=build_default_reference(),
+        settings=settings,
+    )
+    assert len(summary["labels"]) == 2
+    assert sum(summary["total_patients"]) == 2
+
     """Сравнение выбранных файлов (как indices в ksg.compare)."""
     fake = [
         {

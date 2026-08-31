@@ -124,6 +124,24 @@ def _parse_person_name_parts(parts: list[str]) -> tuple[str, list[str]]:
     return surname, name_parts
 
 
+PATIENT_FIO_COL = "ФИО пациента"
+
+
+def _is_patient_name_placeholder(val: Any) -> bool:
+    s = str(val or "").strip()
+    if not s:
+        return True
+    upper = s.upper()
+    return "P.FAM" in upper or "+P." in upper
+
+
+def format_patient_name(full_name) -> str:
+    """Краткое ФИО пациента для таблиц отчётов."""
+    if _is_patient_name_placeholder(full_name):
+        return "неизвестно"
+    return format_doctor_name(full_name)
+
+
 def format_doctor_name(full_name) -> str:
     """Фамилия целиком, имя и отчество — инициалами: «Салихов Д.А.».
 

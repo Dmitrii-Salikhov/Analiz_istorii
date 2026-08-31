@@ -42,6 +42,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "known_departments": [
         "Оториноларингологическое отделение",
     ],
+    "ksg_department_profiles": {},
+    "ksg_check_policy_smo": False,
     "github_repo": "Dmitrii-Salikhov/Analiz_istorii",
     "check_updates_on_start": True,
     "emk_display": {
@@ -70,9 +72,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "kpi_kz": True,
         "kpi_no_service": True,
         "kpi_kslp": True,
+        "kpi_policy_smo": True,
         "section_doctors": True,
         "section_cases": True,
         "section_ops": True,
+        "section_departments": True,
         "section_compare": True,
     },
     "ui_prefs": {
@@ -89,7 +93,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "emk_scope_mode": "single",
         "emk_summary_mode": "all",
         "emk_selected_departments": [],
-        "ops_scope_mode": "single",
+        "ksg_scope_mode": "summary",
+        "ksg_summary_mode": "all",
+        "ksg_selected_departments": [],
+        "ksg_period": "all",
+        "ksg_source": "ksg",
+        "ksg_compare_mode": "months",
         "ops_summary_mode": "all",
         "ops_selected_departments": [],
     },
@@ -163,6 +172,10 @@ def load_config() -> dict[str, Any]:
 
     cfg["report_profiles"] = normalize_report_profiles(cfg.get("report_profiles"))
     cfg["kslp_rules"] = _normalize_kslp_rules(cfg)
+    from ksg_kslp_profiles import normalize_ksg_kslp_profiles
+
+    cfg["ksg_kslp_profiles"] = normalize_ksg_kslp_profiles(cfg)
+    cfg.setdefault("ksg_department_profiles", {})
     # keep flat codes in sync with first rule for older UI / callers
     rules = cfg.get("kslp_rules") or []
     if rules and isinstance(rules[0], dict) and rules[0].get("codes"):
@@ -209,6 +222,10 @@ def save_config(config: dict[str, Any]) -> None:
     if "report_profiles" in config:
         config["report_profiles"] = normalize_report_profiles(config.get("report_profiles"))
     config["kslp_rules"] = _normalize_kslp_rules(config)
+    from ksg_kslp_profiles import normalize_ksg_kslp_profiles
+
+    config["ksg_kslp_profiles"] = normalize_ksg_kslp_profiles(config)
+    config.setdefault("ksg_department_profiles", {})
     rules = config.get("kslp_rules") or []
     if rules and isinstance(rules[0], dict) and rules[0].get("codes"):
         config["kslp_operations_codes"] = list(rules[0]["codes"])

@@ -344,6 +344,13 @@ table.data tr:hover td {
   background: color-mix(in srgb, var(--accent-dim) 35%, transparent);
 }
 
+table.data th[data-col='Услуга'],
+table.data td[data-col='Услуга'] {
+  min-width: 200px;
+  max-width: 360px;
+  white-space: normal;
+}
+
 .empty {
   padding: 48px 20px;
   text-align: center;
@@ -509,15 +516,38 @@ table.data tr:hover td {
 
 .compare-pick {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 14px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
   padding: 8px 12px;
   margin-bottom: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-panel);
   font-size: 13px;
+}
+
+.compare-pick__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.compare-pick__count {
+  font-size: 12px;
+}
+
+.compare-pick__action {
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
+.compare-pick__list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
 }
 
 .compare-pick__item {
@@ -577,4 +607,44 @@ table.data tr:hover td {
 .changelog__entry li {
   margin-bottom: 6px;
   line-height: 1.4;
+}
+
+.toolbar-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-field select {
+  min-width: 140px;
+}
+
+.sub-tabs-inline {
+  display: inline-flex;
+  gap: 4px;
+  margin: 0;
+}
+
+.scope-hint {
+  margin: 0 0 12px;
+}
+
+.ksg-dept-profiles {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.ksg-dept-profile-row {
+  display: grid;
+  grid-template-columns: 1fr 180px;
+  gap: 8px;
+  align-items: center;
+}
+
+.ksg-dept-profile-row__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

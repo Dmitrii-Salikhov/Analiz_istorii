@@ -8,6 +8,8 @@ from typing import Any, Optional, Sequence
 
 import pandas as pd
 
+from lor_analysis import format_patient_name
+
 DEFAULT_LONG_OP_HOURS = 4.0
 
 # Canonical column names after alias map
@@ -185,7 +187,9 @@ def normalize_ops_df(df: pd.DataFrame) -> pd.DataFrame:
         rows.append(
             {
                 "КВС": _fmt_kvs(row.get(COL_KVS) if COL_KVS in df.columns else None),
-                "Пациент": _clean_text(row.get(COL_PATIENT) if COL_PATIENT in df.columns else None),
+                "Пациент": format_patient_name(
+                    row.get(COL_PATIENT) if COL_PATIENT in df.columns else None
+                ),
                 "Хирург": extract_surgeon(team),
                 "Услуга": _clean_text(row.get(COL_SERVICE) if COL_SERVICE in df.columns else None),
                 "Опер.стол": _clean_text(row.get(COL_TABLE) if COL_TABLE in df.columns else None),

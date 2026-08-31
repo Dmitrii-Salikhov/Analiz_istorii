@@ -19,6 +19,7 @@ const ALLOWED_RPC = new Set([
   'emk.sections',
   'emk.violationsSummary',
   'ksg.load',
+  'ksg.analyze',
   'ksg.list',
   'ksg.setActive',
   'ksg.remove',

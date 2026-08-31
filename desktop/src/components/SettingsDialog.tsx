@@ -14,6 +14,17 @@ export type KslpRule = {
   codes: string[];
 };
 
+export type KsgKslpProfile = {
+  id: string;
+  name?: string;
+  builtin?: boolean;
+  mode?: 'rules' | 'age_only' | 'none';
+  age_min?: number;
+  age_max?: number;
+  senior_age?: number;
+  rules?: KslpRule[];
+};
+
 export type ReportProfile = {
   id: string;
   name?: string;
@@ -43,6 +54,9 @@ export type AppConfig = {
   long_op_hours?: number;
   kslp_operations_codes?: string[];
   kslp_rules?: KslpRule[];
+  ksg_kslp_profiles?: Record<string, KsgKslpProfile>;
+  ksg_department_profiles?: Record<string, string>;
+  ksg_check_policy_smo?: boolean;
   preferred_department?: string;
   known_departments?: string[];
   github_repo?: string;
@@ -68,6 +82,12 @@ export type AppConfig = {
     ops_scope_mode?: 'single' | 'summary';
     ops_summary_mode?: 'all' | 'multi';
     ops_selected_departments?: string[];
+    ksg_scope_mode?: 'single' | 'summary';
+    ksg_summary_mode?: 'all' | 'multi';
+    ksg_selected_departments?: string[];
+    ksg_period?: string;
+    ksg_source?: 'ksg' | 'other';
+    ksg_compare_mode?: 'months' | 'departments';
   };
   report_profiles?: ReportProfilesConfig;
   recent_emk?: string[];
@@ -106,13 +126,19 @@ const KSG_KPI: [string, string][] = [
   ['kpi_kz', 'KPI: средний КЗ'],
   ['kpi_no_service', 'KPI: без услуги'],
   ['kpi_kslp', 'KPI: КСЛП'],
+  ['kpi_policy_smo', 'KPI: полис / СМО'],
+];
+
+const KSG_OPTIONAL_CHECKS: [string, string][] = [
+  ['ksg_check_policy_smo', 'Номер полиса и СМО'],
 ];
 
 const KSG_SECTIONS: [string, string][] = [
   ['section_doctors', 'Раздел: суммы по врачам'],
   ['section_cases', 'Раздел: случаи'],
   ['section_ops', 'Раздел: операции'],
-  ['section_compare', 'Раздел: сравнение месяцев'],
+  ['section_departments', 'Раздел: по отделениям'],
+  ['section_compare', 'Раздел: сравнение'],
 ];
 
 type TabId = 'display' | 'levels' | 'kslp' | 'formats' | 'department' | 'system';
@@ -144,6 +170,19 @@ function newRuleId(): string {
     return crypto.randomUUID();
   }
   return `rule-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function profileOptions(cfg: AppConfig): OpItem[] {
+  const profiles = cfg.ksg_kslp_profiles || {};
+  const builtin: OpItem[] = [
+    { code: 'lor', name: 'ЛОР' },
+    { code: 'standard', name: 'Стандарт' },
+    { code: 'none', name: 'Без проверок' },
+  ];
+  const custom = Object.values(profiles)
+    .filter((p) => p && !p.builtin)
+    .map((p) => ({ code: p.id, name: p.name || p.id }));
+  return [...builtin, ...custom];
 }
 
 export function SettingsDialog({
@@ -377,6 +416,24 @@ export function SettingsDialog({
             </div>
           </div>
           <div className="form-row">
+            <label>КСГ — опциональные проверки</label>
+            <p className="muted" style={{ margin: '0 0 8px' }}>
+              Выполняются только при наличии колонок «Номер полиса» и «СМО» в файле.
+            </p>
+            <div className="check-list">
+              {KSG_OPTIONAL_CHECKS.map(([key, label]) => (
+                <label key={key}>
+                  <input
+                    type="checkbox"
+                    checked={cfg[key as keyof AppConfig] === true}
+                    onChange={(e) => set(key as keyof AppConfig, e.target.checked)}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="form-row">
             <label>Длительная госпитализация — порог койко-дней (&gt;)</label>
             <input
               type="number"
@@ -544,6 +601,67 @@ export function SettingsDialog({
                 ))}
               </ul>
             )}
+          </div>
+
+          <div className="form-row">
+            <label>Профили КСЛП для отделений</label>
+            {departments.length === 0 ? (
+              <p className="muted" style={{ margin: 0 }}>
+                Загрузите общий реестр КСГ — здесь появится список отделений.
+              </p>
+            ) : (
+              <div className="ksg-dept-profiles">
+                {departments.map((dep) => (
+                  <div key={dep} className="ksg-dept-profile-row">
+                    <span className="ksg-dept-profile-row__name" title={dep}>{dep}</span>
+                    <select
+                      value={cfg.ksg_department_profiles?.[dep] || 'standard'}
+                      onChange={(e) => {
+                        const next = { ...(cfg.ksg_department_profiles || {}), [dep]: e.target.value };
+                        set('ksg_department_profiles', next);
+                      }}
+                    >
+                      {profileOptions(cfg).map((p) => (
+                        <option key={p.code} value={p.code}>{p.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="form-row">
+            <label>Сохранить правило как профиль отделения</label>
+            <div className="kslp-rule-actions">
+              <button
+                className="btn"
+                type="button"
+                disabled={!draftCodes.length}
+                title="Создать пользовательский профиль КСЛП из текущей комбинации операций"
+                onClick={() => {
+                  const codes = draftCodes.map((c) => c.trim()).filter(Boolean);
+                  if (!codes.length) return;
+                  const name = (draftName || `Профиль ${Object.keys(cfg.ksg_kslp_profiles || {}).length + 1}`).trim();
+                  const id = name.toLowerCase().replace(/[^a-z0-9а-яё]+/gi, '-').replace(/^-+|-+$/g, '') || newRuleId();
+                  const profiles = { ...(cfg.ksg_kslp_profiles || {}) };
+                  profiles[id] = {
+                    id,
+                    name,
+                    mode: 'rules',
+                    rules: [{ id: `${id}-rule`, name, codes }],
+                    age_min: cfg.kslp_age_min,
+                    age_max: cfg.kslp_age_max,
+                    senior_age: cfg.kslp_senior_age,
+                  };
+                  set('ksg_kslp_profiles', profiles);
+                  cancelEditRule();
+                }}
+              >
+                Сохранить как профиль
+              </button>
+              <span className="muted">Профиль можно назначить отделению выше</span>
+            </div>
           </div>
         </div>
       )}

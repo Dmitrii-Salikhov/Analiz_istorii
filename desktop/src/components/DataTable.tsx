@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { copyText, rowsToTsv } from '../lib/clipboard';
+import { formatTableCell } from '../lib/format';
+import { collectTableColumns, pickSortColumn, sortRows, type SortMode } from '../lib/sortUtils';
+import { SortControls } from './SortControls';
 import './DataTable.css';
 
 export function DataTable({
@@ -7,16 +10,21 @@ export function DataTable({
   empty = 'Нет данных',
   filterable = true,
   copyable = true,
+  sortable = true,
   filterPlaceholder = 'Поиск по таблице…',
   initialQuery = '',
   queryResetKey,
   formatCopy,
   getCellClass,
+  defaultSortMode = 'asc',
+  sortColumn: sortColumnProp,
+  columnOrder,
 }: {
   rows: Record<string, unknown>[];
   empty?: string;
   filterable?: boolean;
   copyable?: boolean;
+  sortable?: boolean;
   filterPlaceholder?: string;
   /** Начальный / внешний фильтр (например, тип нарушения). */
   initialQuery?: string;
@@ -29,19 +37,30 @@ export function DataTable({
     col: string,
     rowIndex: number,
   ) => string | undefined;
+  defaultSortMode?: SortMode;
+  /** Колонка для сортировки; по умолчанию — первая. */
+  sortColumn?: string;
+  /** Предпочитаемый порядок колонок (объединяет ключи всех строк). */
+  columnOrder?: readonly string[];
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [copied, setCopied] = useState(false);
+  const [sortMode, setSortMode] = useState<SortMode>(defaultSortMode);
 
   useEffect(() => {
     if (queryResetKey === undefined) return;
     setQuery(initialQuery);
   }, [queryResetKey, initialQuery]);
 
-  const columns = useMemo(() => {
-    if (!rows.length) return [] as string[];
-    return Object.keys(rows[0]);
-  }, [rows]);
+  const columns = useMemo(
+    () => collectTableColumns(rows, columnOrder),
+    [rows, columnOrder],
+  );
+
+  const sortColumn = useMemo(() => {
+    if (sortColumnProp && columns.includes(sortColumnProp)) return sortColumnProp;
+    return pickSortColumn(columns, rows, sortMode);
+  }, [sortColumnProp, columns, rows, sortMode]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -51,9 +70,19 @@ export function DataTable({
     );
   }, [rows, columns, query]);
 
+  const sorted = useMemo(() => {
+    if (!sortable || !sortColumn) return filtered;
+    return sortRows(filtered, sortColumn, sortMode);
+  }, [filtered, sortColumn, sortMode, sortable]);
+
   const onCopy = async () => {
     try {
-      const text = formatCopy ? formatCopy(filtered) : rowsToTsv(filtered);
+      const forCopy = sorted.map((row) => {
+        const out: Record<string, unknown> = {};
+        for (const c of columns) out[c] = formatTableCell(row[c], c);
+        return out;
+      });
+      const text = formatCopy ? formatCopy(sorted) : rowsToTsv(forCopy);
       await copyText(text);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
@@ -66,10 +95,15 @@ export function DataTable({
     return <div className="muted">{empty}</div>;
   }
 
+  const showToolbar = filterable || copyable || sortable;
+
   return (
     <div className="data-table">
-      {(filterable || copyable) && (
+      {showToolbar && (
         <div className="data-table__toolbar">
+          {sortable && (
+            <SortControls mode={sortMode} onChange={setSortMode} />
+          )}
           {filterable && (
             <input
               className="data-table__filter"
@@ -81,7 +115,7 @@ export function DataTable({
           )}
           {filterable && query && (
             <span className="muted data-table__count">
-              {filtered.length} / {rows.length}
+              {sorted.length} / {rows.length}
             </span>
           )}
           {copyable && (
@@ -96,7 +130,7 @@ export function DataTable({
           )}
         </div>
       )}
-      {!filtered.length ? (
+      {!sorted.length ? (
         <div className="muted">Нет строк по фильтру</div>
       ) : (
         <div className="table-wrap">
@@ -104,18 +138,18 @@ export function DataTable({
             <thead>
               <tr>
                 {columns.map((c) => (
-                  <th key={c}>{c}</th>
+                  <th key={c} data-col={c}>{c}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {filtered.map((row, i) => (
+              {sorted.map((row, i) => (
                 <tr key={i}>
                   {columns.map((c) => {
                     const cls = getCellClass?.(row, c, i);
                     return (
-                      <td key={c} className={cls}>
-                        {row[c] == null || row[c] === '' ? '—' : String(row[c])}
+                      <td key={c} className={cls} data-col={c}>
+                        {formatTableCell(row[c], c)}
                       </td>
                     );
                   })}

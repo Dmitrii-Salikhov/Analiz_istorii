@@ -573,7 +573,11 @@ class KsgReportFrame(ttkb.Frame):
             ("Дешёвые", r["low_money"]),
             ("Дорогие", r["high_money"]),
             ("Без кода услуги", r["no_service"]),
-        ]:
+        ] + (
+            [("Полис / СМО", r.get("policy_issues", pd.DataFrame()))]
+            if r.get("policy_check_enabled")
+            else []
+        ):
             tab = ttkb.Frame(note)
             note.add(tab, text=name)
             if not df_data.empty:
@@ -597,7 +601,11 @@ class KsgReportFrame(ttkb.Frame):
                 ("Дешёвые (<)", r["low_money"]),
                 ("Дорогие (>)", r["high_money"]),
                 ("Без кода услуги", r["no_service"]),
-            ]:
+            ] + (
+                [("Полис / СМО", r.get("policy_issues", pd.DataFrame()))]
+                if r.get("policy_check_enabled")
+                else []
+            ):
                 text += f"\n{name}:\n"
                 text += df_data.to_string(index=False) + "\n"
             self.clipboard_clear()
@@ -976,6 +984,9 @@ class KsgReportFrame(ttkb.Frame):
             parts.extend(["\n=== БЕЗ КОДА УСЛУГИ ===", r["no_service"].to_string(index=False)])
         if not r["kslp_issues"].empty:
             parts.extend(["\n=== НАРУШЕНИЯ КСЛП ===", r["kslp_issues"].to_string(index=False)])
+        policy_issues = r.get("policy_issues")
+        if r.get("policy_check_enabled") and policy_issues is not None and not policy_issues.empty:
+            parts.extend(["\n=== ПОЛИС / СМО ===", policy_issues.to_string(index=False)])
         parts.extend(
             [
                 "\n=== СРЕДНИЙ КЗ ===",
@@ -1040,6 +1051,10 @@ class KsgReportFrame(ttkb.Frame):
             if not r["kslp_issues"].empty:
                 f.write("Нарушения КСЛП:\n")
                 f.write(r["kslp_issues"].to_string(index=False) + "\n\n")
+            policy_issues = r.get("policy_issues")
+            if r.get("policy_check_enabled") and policy_issues is not None and not policy_issues.empty:
+                f.write("Полис / СМО:\n")
+                f.write(policy_issues.to_string(index=False) + "\n\n")
             f.write("Средний КЗ:\n")
             f.write(r["avg_kz_doctor"].to_string(index=False) + "\n")
             f.write(f"Средний по отделению: {r['avg_kz_total']}\n")
@@ -1081,6 +1096,10 @@ class KsgReportFrame(ttkb.Frame):
             if not r["kslp_issues"].empty:
                 r["kslp_issues"].to_excel(writer, sheet_name="КСЛП нарушения", index=False)
                 self._auto_adjust_excel_columns(writer, "КСЛП нарушения", r["kslp_issues"])
+            policy_issues = r.get("policy_issues")
+            if r.get("policy_check_enabled") and policy_issues is not None and not policy_issues.empty:
+                policy_issues.to_excel(writer, sheet_name="Полис и СМО", index=False)
+                self._auto_adjust_excel_columns(writer, "Полис и СМО", policy_issues)
             r["avg_kz_doctor"].to_excel(writer, sheet_name="Средний КЗ", index=False)
             self._auto_adjust_excel_columns(writer, "Средний КЗ", r["avg_kz_doctor"])
         offer_open_folder(file_path)

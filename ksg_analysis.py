@@ -9,7 +9,18 @@ from typing import Any, Mapping
 import pandas as pd
 
 from paths import resource_path
-from lor_analysis import format_doctor_name
+from lor_analysis import (
+    PATIENT_FIO_COL,
+    format_department_scope_label,
+    format_doctor_name,
+    format_patient_name,
+)
+from ksg_kslp_profiles import (
+    normalize_department_profile_map,
+    normalize_ksg_kslp_profiles,
+    resolve_row_kslp_settings,
+)
+from ksg_policy_checks import build_policy_smo_issues, policy_smo_check_available
 
 DEFAULT_REFERENCE_MAPPING = [
     ("Аденотомия", "A16.08.002.001", "на миндалинах и аденоидах (5.2)"),
@@ -90,6 +101,73 @@ def _age_group(age) -> str:
     return "65+ лет"
 
 
+def _month_ru(month: int) -> str:
+    names = {
+        1: "январь",
+        2: "февраль",
+        3: "март",
+        4: "апрель",
+        5: "май",
+        6: "июнь",
+        7: "июль",
+        8: "август",
+        9: "сентябрь",
+        10: "октябрь",
+        11: "ноябрь",
+        12: "декабрь",
+    }
+    return names.get(month, str(month))
+
+
+def _ksg_date_column(df: pd.DataFrame) -> str | None:
+    if "Выписка" in df.columns:
+        return "Выписка"
+    if "Поступление" in df.columns:
+        return "Поступление"
+    return None
+
+
+def list_ksg_periods(df: pd.DataFrame) -> list[dict[str, str]]:
+    col = _ksg_date_column(df)
+    if not col or df.empty:
+        return []
+    dayfirst = True
+    dates = pd.to_datetime(df[col], dayfirst=dayfirst, errors="coerce").dropna()
+    if dates.empty:
+        return []
+    periods = sorted(dates.dt.to_period("M").unique())
+    out: list[dict[str, str]] = []
+    for period in periods:
+        out.append(
+            {
+                "id": str(period),
+                "label": f"{_month_ru(int(period.month))} {int(period.year)}",
+            }
+        )
+    return out
+
+
+def filter_ksg_by_period(df: pd.DataFrame, period: str | None) -> pd.DataFrame:
+    if df.empty or not period or str(period).strip().lower() in ("", "all"):
+        return df.copy()
+    col = _ksg_date_column(df)
+    if not col:
+        return df.copy()
+    dates = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+    target = pd.Period(str(period), freq="M")
+    mask = dates.dt.to_period("M") == target
+    return df.loc[mask.fillna(False)].copy()
+
+
+def _analysis_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
+    cfg = dict(settings)
+    profiles = normalize_ksg_kslp_profiles(cfg)
+    cfg["ksg_kslp_profiles"] = profiles
+    departments = [str(d).strip() for d in (cfg.get("_ksg_departments") or []) if str(d).strip()]
+    cfg["ksg_department_profiles"] = normalize_department_profile_map(cfg, departments)
+    return cfg
+
+
 def _resolve_kslp_rules(settings: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Normalize kslp_rules from settings; fall back to flat kslp_operations_codes."""
     raw = settings.get("kslp_rules")
@@ -119,6 +197,118 @@ def _matching_kslp_rules(code_set: set[str], rules: list[dict[str, Any]]) -> lis
         if codes and all(c in code_set for c in codes):
             matched.append(rule)
     return matched
+
+
+def build_by_department_summary(
+    df: pd.DataFrame,
+    reference: Mapping[str, tuple[str, str]],
+    settings: Mapping[str, Any],
+) -> pd.DataFrame:
+    if df.empty or "Отделение" not in df.columns:
+        return pd.DataFrame(
+            columns=["Отделение", "Пациенты", "Сумма", "Средний КЗ", "КСЛП"]
+        )
+    rows: list[dict[str, Any]] = []
+    for dep, group in df.groupby("Отделение", dropna=False):
+        part = analyze_ksg(group, reference, {**settings, "_skip_by_department": True})
+        rows.append(
+            {
+                "Отделение": dep,
+                "Пациенты": part["total_patients"],
+                "Сумма": part["total_sum"],
+                "Средний КЗ": part["avg_kz_total"],
+                "КСЛП": part["total_kslp_issues"],
+            }
+        )
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values(["Сумма", "Отделение"], ascending=[False, True])
+    return out.reset_index(drop=True)
+
+
+def _ksg_money_columns(data: pd.DataFrame) -> list[str]:
+    cols = ["№ талона"]
+    if PATIENT_FIO_COL in data.columns:
+        cols.append(PATIENT_FIO_COL)
+    cols.append("Врач")
+    if "Код услуги" in data.columns:
+        cols.append("Код услуги")
+    cols.extend(["Сумма к оплате", "Дата рождения"])
+    if "Отделение" in data.columns:
+        cols.append("Отделение")
+    return cols
+
+
+def _service_label(raw: Any, reference: Mapping[str, tuple[str, str]]) -> str:
+    if pd.isna(raw):
+        return "Услуга отсутствует"
+    text = str(raw).strip()
+    if not text or text.lower() in ("nan", "none", "null"):
+        return "Услуга отсутствует"
+    codes = [c for c in text.split() if c.strip()]
+    if not codes:
+        return "Услуга отсутствует"
+    parts: list[str] = []
+    for code in sorted(set(codes)):
+        info = reference.get(code)
+        parts.append(f"{code} ({info[0]})" if info else code)
+    return ", ".join(parts)
+
+
+def _format_ksg_case_frame(
+    df: pd.DataFrame,
+    reference: Mapping[str, tuple[str, str]] | None = None,
+) -> pd.DataFrame:
+    out = df.copy()
+    if PATIENT_FIO_COL in out.columns:
+        out[PATIENT_FIO_COL] = out[PATIENT_FIO_COL].map(format_patient_name)
+    if "Врач" in out.columns:
+        out["Врач"] = out["Врач"].map(format_doctor_name)
+    ref = reference or {}
+    if "Код услуги" in out.columns:
+        out["Услуга"] = out["Код услуги"].map(lambda v: _service_label(v, ref))
+        out = out.drop(columns=["Код услуги"])
+    elif "Услуга" not in out.columns:
+        out["Услуга"] = "Услуга отсутствует"
+    else:
+        out["Услуга"] = out["Услуга"].map(
+            lambda v: _service_label(v, ref)
+            if str(v or "").strip()
+            else "Услуга отсутствует"
+        )
+    if "Услуга" in out.columns:
+        cols = [c for c in out.columns if c != "Услуга"]
+        insert_at = cols.index("Врач") + 1 if "Врач" in cols else len(cols)
+        cols.insert(insert_at, "Услуга")
+        out = out[cols]
+    return out
+
+
+def _kslp_issue_row(row: pd.Series, *, age: int, kslp: Any, note: str) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "№ талона": row["№ талона"],
+        "Врач": format_doctor_name(row["Врач"]),
+        "Дата рождения": row["Дата рождения"],
+        "Возраст": age,
+        "КСЛП": kslp,
+        "Замечание": note,
+    }
+    if PATIENT_FIO_COL in row.index:
+        item[PATIENT_FIO_COL] = format_patient_name(row.get(PATIENT_FIO_COL))
+    if "Отделение" in row.index:
+        item["Отделение"] = row.get("Отделение", "")
+    return item
+
+
+def _kslp_issue_columns(data: pd.DataFrame) -> list[str]:
+    cols = ["№ талона"]
+    if PATIENT_FIO_COL in data.columns:
+        cols.append(PATIENT_FIO_COL)
+    cols.append("Врач")
+    if "Отделение" in data.columns:
+        cols.append("Отделение")
+    cols.extend(["Дата рождения", "Возраст", "КСЛП", "Замечание"])
+    return cols
 
 
 def analyze_ksg(
@@ -199,12 +389,26 @@ def analyze_ksg(
 
     low_thresh = float(settings.get("ksg_threshold_low", 20000))
     high_thresh = float(settings.get("ksg_threshold_high", 100000))
-    cols_money = ["№ талона", "Врач", "Сумма к оплате", "Дата рождения"]
-    low_money = data[data["Сумма к оплате"] < low_thresh][cols_money].copy()
-    high_money = data[data["Сумма к оплате"] > high_thresh][cols_money].copy()
-    no_service = data[
-        data["Код услуги"].isna() | (data["Код услуги"].astype(str).str.strip() == "")
-    ][cols_money].copy()
+    cols_money = _ksg_money_columns(data)
+    low_money = _format_ksg_case_frame(
+        data[data["Сумма к оплате"] < low_thresh][cols_money].copy(),
+        reference,
+    )
+    high_money = _format_ksg_case_frame(
+        data[data["Сумма к оплате"] > high_thresh][cols_money].copy(),
+        reference,
+    )
+    no_service = _format_ksg_case_frame(
+        data[
+            data["Код услуги"].isna() | (data["Код услуги"].astype(str).str.strip() == "")
+        ][cols_money].copy(),
+        reference,
+    )
+
+    cfg = _analysis_settings(settings)
+    profiles = cfg.get("ksg_kslp_profiles") or {}
+    department_profile_map = cfg.get("ksg_department_profiles") or {}
+    use_profiles = "Отделение" in data.columns and bool(profiles)
 
     target_codes = list(settings.get("kslp_operations_codes") or [])
     age_min = int(settings.get("kslp_age_min", 0))
@@ -220,10 +424,30 @@ def analyze_ksg(
         kslp = row["КСЛП итоговый"]
         if pd.isna(kslp):
             continue
+
+        if use_profiles:
+            row_settings = resolve_row_kslp_settings(
+                row.get("Отделение"),
+                row.get("Отделение_код"),
+                profiles,
+                department_profile_map,
+            )
+            if not row_settings.get("check_kslp"):
+                continue
+            row_age_min = int(row_settings.get("age_min", age_min))
+            row_age_max = int(row_settings.get("age_max", age_max))
+            row_senior_age = int(row_settings.get("senior_age", senior_age))
+            row_rules = list(row_settings.get("rules") or []) if row_settings.get("use_rules") else []
+            profile_name = str(row_settings.get("profile_name") or "")
+        else:
+            row_age_min, row_age_max, row_senior_age = age_min, age_max, senior_age
+            row_rules = kslp_rules
+            profile_name = ""
+
         code_set = set(str(row["Код услуги"]).strip().split())
-        is_child = age_min <= age <= age_max
-        is_senior = age >= senior_age
-        matched_rules = _matching_kslp_rules(code_set, kslp_rules)
+        is_child = row_age_min <= age <= row_age_max
+        is_senior = age >= row_senior_age
+        matched_rules = _matching_kslp_rules(code_set, row_rules)
         has_ops_rule = bool(matched_rules)
         need_kslp = is_child or is_senior or has_ops_rule
 
@@ -236,47 +460,33 @@ def analyze_ksg(
         if need_kslp and kslp == 0:
             reasons = []
             if is_child:
-                reasons.append(f"ребёнок {age_min}-{age_max} лет")
+                reasons.append(f"ребёнок {row_age_min}-{row_age_max} лет")
             if is_senior:
-                reasons.append(f"возраст ≥{senior_age} лет")
+                reasons.append(f"возраст ≥{row_senior_age} лет")
             for rule in matched_rules:
                 rule_codes = ", ".join(rule["codes"])
                 reasons.append(f"правило «{rule['name']}» ({rule_codes})")
-            kslp_issues.append(
-                (
-                    row["№ талона"],
-                    row["Врач"],
-                    row["Дата рождения"],
-                    age,
-                    kslp,
-                    f"КСЛП должен быть >0 (основание: {'; '.join(reasons)}). Коды услуг: {codes_str}",
-                )
-            )
+            note = f"КСЛП должен быть >0 (основание: {'; '.join(reasons)}). Коды услуг: {codes_str}"
+            if profile_name:
+                note = f"[{profile_name}] {note}"
+            kslp_issues.append(_kslp_issue_row(row, age=age, kslp=kslp, note=note))
         elif not need_kslp and kslp > 0:
             rule_hint = (
-                f"{len(kslp_rules)} правил(а) по операциям"
-                if kslp_rules
+                f"{len(row_rules)} правил(а) по операциям"
+                if row_rules
                 else "нет правил по операциям"
             )
-            kslp_issues.append(
-                (
-                    row["№ талона"],
-                    row["Врач"],
-                    row["Дата рождения"],
-                    age,
-                    kslp,
-                    (
-                        f"КСЛП > 0 без показаний (нет оснований: не ребёнок {age_min}-{age_max}, "
-                        f"возраст < {senior_age}, не сработало ни одно правило операций — {rule_hint}). "
-                        f"Коды услуг: {codes_str}"
-                    ),
-                )
+            note = (
+                f"КСЛП > 0 без показаний (нет оснований: не ребёнок {row_age_min}-{row_age_max}, "
+                f"возраст < {row_senior_age}, не сработало ни одно правило операций — {rule_hint}). "
+                f"Коды услуг: {codes_str}"
             )
+            if profile_name:
+                note = f"[{profile_name}] {note}"
+            kslp_issues.append(_kslp_issue_row(row, age=age, kslp=kslp, note=note))
 
-    kslp_issues_df = pd.DataFrame(
-        kslp_issues,
-        columns=["№ талона", "Врач", "Дата рождения", "Возраст", "КСЛП", "Замечание"],
-    )
+    kslp_columns = _kslp_issue_columns(data)
+    kslp_issues_df = pd.DataFrame(kslp_issues, columns=kslp_columns)
 
     data["Возрастная группа"] = data["Возраст"].apply(_age_group)
     age_dist = data["Возрастная группа"].value_counts()
@@ -284,6 +494,19 @@ def analyze_ksg(
     age_kz = data.groupby("Возрастная группа")["КЗ"].mean().round(3)
     avg_kz_doctor = data.groupby("Врач")["КЗ"].mean().reset_index(name="Средний КЗ").round(3)
     avg_kz_total = round(float(data["КЗ"].mean()), 3) if len(data) else 0.0
+
+    by_department = pd.DataFrame()
+    if not settings.get("_skip_by_department"):
+        by_department = build_by_department_summary(data, reference, settings)
+
+    policy_check_available = policy_smo_check_available(data)
+    policy_check_enabled = bool(settings.get("ksg_check_policy_smo")) and policy_check_available
+    policy_issues_df = (
+        build_policy_smo_issues(data) if policy_check_enabled else pd.DataFrame()
+    )
+    other_violations: dict[str, int] = {}
+    if policy_check_enabled and not policy_issues_df.empty:
+        other_violations["Полис / СМО"] = len(policy_issues_df)
 
     return {
         "patient_counts": patient_counts,
@@ -297,13 +520,18 @@ def analyze_ksg(
         "high_money": high_money,
         "no_service": no_service,
         "kslp_issues": kslp_issues_df,
+        "policy_issues": policy_issues_df,
+        "policy_check_enabled": policy_check_enabled,
+        "policy_check_available": policy_check_available,
+        "by_department": by_department,
         "age_dist": age_dist,
         "age_sum": age_sum,
         "age_kz": age_kz,
         "avg_kz_doctor": avg_kz_doctor,
         "avg_kz_total": avg_kz_total,
         "total_kslp_issues": len(kslp_issues_df),
-        "other_violations": {},
+        "total_policy_issues": len(policy_issues_df),
+        "other_violations": other_violations,
         "thresholds": {"low": low_thresh, "high": high_thresh},
         "kslp_settings": {
             "age_min": age_min,
@@ -355,11 +583,19 @@ def ksg_period_sort_key(df: pd.DataFrame | None, name: str = "") -> tuple[int, i
     return year, month, 1
 
 
+def ksg_item_primary_df(item: Mapping[str, Any]) -> pd.DataFrame | None:
+    """DataFrame КСГ из элемента сессии без неоднозначного truth-value."""
+    df = item.get("df_ksg")
+    if df is None:
+        df = item.get("df")
+    return df if isinstance(df, pd.DataFrame) else None
+
+
 def sort_ksg_files_chronologically(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Сортирует загруженные КСГ-файлы по возрастанию периода."""
     return sorted(
         files,
-        key=lambda f: ksg_period_sort_key(f.get("df"), f.get("name", "")),
+        key=lambda f: ksg_period_sort_key(ksg_item_primary_df(f), f.get("name", "")),
     )
 
 
@@ -388,3 +624,59 @@ def build_month_comparison(files: list[dict[str, Any]]) -> dict[str, Any]:
     summary["doctors"] = doctors
     summary["doctor_sums"] = by_doctor
     return summary
+
+
+def build_department_comparison(
+    item: dict[str, Any],
+    *,
+    departments: list[str],
+    period: str,
+    source: str,
+    reference: Mapping[str, tuple[str, str]],
+    settings: Mapping[str, Any],
+) -> dict[str, Any]:
+    from ksg_departments import filter_ksg_dataframe
+
+    if source == "other":
+        df_full = item.get("df_other")
+    else:
+        df_full = item.get("df_ksg")
+        if df_full is None:
+            df_full = item.get("df")
+    if df_full is None or getattr(df_full, "empty", True):
+        return {
+            "labels": [],
+            "departments": [],
+            "total_patients": [],
+            "total_sum": [],
+            "avg_kz": [],
+            "kslp_issues": [],
+        }
+    df_full = filter_ksg_by_period(df_full, period)
+    labels: list[str] = []
+    patients: list[int] = []
+    sums: list[float] = []
+    kz_values: list[float] = []
+    kslp_counts: list[int] = []
+    deps_out: list[str] = []
+    analyze_cfg = dict(settings)
+    analyze_cfg["_ksg_departments"] = list(item.get("departments") or [])
+    for dep in departments:
+        filtered, _ = filter_ksg_dataframe(df_full, "single", dep, [])
+        if filtered.empty:
+            continue
+        result = analyze_ksg(filtered, reference, {**analyze_cfg, "_skip_by_department": True})
+        labels.append(dep)
+        deps_out.append(dep)
+        patients.append(int(result.get("total_patients") or 0))
+        sums.append(float(result.get("total_sum") or 0))
+        kz_values.append(float(result.get("avg_kz_total") or 0))
+        kslp_counts.append(int(result.get("total_kslp_issues") or 0))
+    return {
+        "labels": labels,
+        "departments": deps_out,
+        "total_patients": patients,
+        "total_sum": sums,
+        "avg_kz": kz_values,
+        "kslp_issues": kslp_counts,
+    }

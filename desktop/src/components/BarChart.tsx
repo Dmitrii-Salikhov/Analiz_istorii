@@ -1,3 +1,8 @@
+import { useMemo, useState } from 'react';
+import { barColorForLabel } from '../lib/chartColors';
+import { fmtChartValue } from '../lib/format';
+import { sortBarGroups, sortBarItems, type SortMode } from '../lib/sortUtils';
+import { SortControls } from './SortControls';
 import './BarChart.css';
 
 export type BarItem = { label: string; value: number; color?: string };
@@ -10,8 +15,8 @@ export type BarGroup = {
   series: BarSeries[];
 };
 
-function fmtValue(value: number): string {
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+function fmtValue(value: number, unit = ''): string {
+  return fmtChartValue(value, unit);
 }
 
 export function BarChart({
@@ -24,6 +29,8 @@ export function BarChart({
   itemHint,
   onSeriesDoubleClick,
   seriesHint,
+  sortable = true,
+  defaultSortMode = 'asc',
 }: {
   items?: BarItem[];
   groups?: BarGroup[];
@@ -38,33 +45,74 @@ export function BarChart({
   /** Двойной клик по серии в группе (режим groups). */
   onSeriesDoubleClick?: (group: BarGroup, series: BarSeries) => void;
   seriesHint?: string;
+  sortable?: boolean;
+  defaultSortMode?: SortMode;
 }) {
+  const [sortMode, setSortMode] = useState<SortMode>(defaultSortMode);
+
+  const sortedGroups = useMemo(() => {
+    if (!groups?.length) return [];
+    if (!sortable) return groups;
+    return sortBarGroups(groups, sortMode);
+  }, [groups, sortMode, sortable]);
+
+  const sortedItems = useMemo(() => {
+    const list = items || [];
+    if (!list.length) return [];
+    if (!sortable) return list;
+    return sortBarItems(list, sortMode);
+  }, [items, sortMode, sortable]);
+
+  const coloredItems = useMemo(
+    () =>
+      sortedItems.map((item, i) => ({
+        ...item,
+        color: item.color ?? barColorForLabel(item.label, i),
+      })),
+    [sortedItems],
+  );
+
+  const coloredGroups = useMemo(
+    () =>
+      sortedGroups.map((group, gi) => ({
+        ...group,
+        series: group.series.map((s) => ({
+          ...s,
+          color: s.color ?? barColorForLabel(group.label, gi),
+        })),
+      })),
+    [sortedGroups],
+  );
+
   if (groups && groups.length) {
-    const allVals = groups.flatMap((g) => g.series.map((s) => s.value));
+    const allVals = coloredGroups.flatMap((g) => g.series.map((s) => s.value));
     const max = Math.max(...allVals, 1);
     return (
       <div className="bar-chart-wrap">
-        {legend && legend.length > 0 && (
-          <div className="bar-legend">
-            {legend.map((l) => (
-              <span key={l.key} className="bar-legend__item">
-                <span
-                  className="bar-legend__swatch"
-                  style={{ background: l.color || 'var(--accent)' }}
-                />
-                {l.label}
-              </span>
-            ))}
-          </div>
-        )}
+        <div className="bar-chart__header">
+          {sortable && <SortControls mode={sortMode} onChange={setSortMode} />}
+          {legend && legend.length > 0 && (
+            <div className="bar-legend">
+              {legend.map((l) => (
+                <span key={l.key} className="bar-legend__item">
+                  <span
+                    className="bar-legend__swatch"
+                    style={{ background: l.color || 'var(--accent)' }}
+                  />
+                  {l.label}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="bar-chart bar-chart--grouped" style={{ minHeight: height }}>
-          {groups.map((group) => (
+          {coloredGroups.map((group) => (
             <div className="bar-group" key={group.label} title={group.label}>
               <div className="bar-group__pair">
                 {group.series.map((s) => {
                   const seriesClickable = Boolean(onSeriesDoubleClick);
                   const tip = [
-                    `${group.label} · ${s.key}: ${fmtValue(s.value)}${unit}`,
+                    `${group.label} · ${s.key}: ${fmtValue(s.value, unit)}`,
                     seriesHint ||
                       (seriesClickable ? 'Двойной клик — список историй этой группы' : ''),
                   ]
@@ -85,15 +133,14 @@ export function BarChart({
                       }
                     >
                       <div className="bar-value">
-                        {fmtValue(s.value)}
-                        {unit}
+                        {fmtValue(s.value, unit)}
                       </div>
                       <div className="bar-track bar-track--slim">
                         <div
                           className="bar-fill"
                           style={{
                             height: `${Math.max(s.value > 0 ? 4 : 0, (s.value / max) * 100)}%`,
-                            background: s.color || 'var(--accent)',
+                            background: s.color,
                           }}
                         />
                       </div>
@@ -109,52 +156,57 @@ export function BarChart({
     );
   }
 
-  const list = items || [];
-  if (!list.length) {
+  if (!coloredItems.length) {
     return <div className="bar-empty">Нет данных для графика</div>;
   }
-  const max = Math.max(...list.map((i) => i.value), 1);
+  const max = Math.max(...coloredItems.map((i) => i.value), 1);
   const clickable = Boolean(onItemDoubleClick);
   return (
-    <div className="bar-chart" style={{ minHeight: height }}>
-      {list.map((item) => {
-        const tip = [
-          `${item.label}: ${fmtValue(item.value)}${unit}`,
-          itemHint || (clickable ? 'Двойной клик — список нарушений этого типа' : ''),
-        ]
-          .filter(Boolean)
-          .join('\n');
-        return (
-          <div
-            className={`bar-col${clickable ? ' bar-col--clickable' : ''}`}
-            key={item.label}
-            title={tip}
-            onDoubleClick={
-              onItemDoubleClick
-                ? (e) => {
-                    e.preventDefault();
-                    onItemDoubleClick(item);
-                  }
-                : undefined
-            }
-          >
-            <div className="bar-value">
-              {fmtValue(item.value)}
-              {unit}
+    <div className="bar-chart-wrap">
+      {sortable && (
+        <div className="bar-chart__header">
+          <SortControls mode={sortMode} onChange={setSortMode} />
+        </div>
+      )}
+      <div className="bar-chart" style={{ minHeight: height }}>
+        {coloredItems.map((item) => {
+          const tip = [
+            `${item.label}: ${fmtValue(item.value, unit)}`,
+            itemHint || (clickable ? 'Двойной клик — список нарушений этого типа' : ''),
+          ]
+            .filter(Boolean)
+            .join('\n');
+          return (
+            <div
+              className={`bar-col${clickable ? ' bar-col--clickable' : ''}`}
+              key={item.label}
+              title={tip}
+              onDoubleClick={
+                onItemDoubleClick
+                  ? (e) => {
+                      e.preventDefault();
+                      onItemDoubleClick(item);
+                    }
+                  : undefined
+              }
+            >
+              <div className="bar-value">
+                {fmtValue(item.value, unit)}
+              </div>
+              <div className="bar-track">
+                <div
+                  className="bar-fill"
+                  style={{
+                    height: `${Math.max(4, (item.value / max) * 100)}%`,
+                    background: item.color,
+                  }}
+                />
+              </div>
+              <div className="bar-label">{item.label}</div>
             </div>
-            <div className="bar-track">
-              <div
-                className="bar-fill"
-                style={{
-                  height: `${Math.max(4, (item.value / max) * 100)}%`,
-                  background: item.color || 'var(--accent)',
-                }}
-              />
-            </div>
-            <div className="bar-label">{item.label}</div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }

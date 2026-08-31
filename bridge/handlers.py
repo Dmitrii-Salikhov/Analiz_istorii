@@ -13,7 +13,7 @@ import pandas as pd
 from config_store import load_config, push_recent_file, save_config
 from excel_io import (
     list_departments,
-    load_ksg_excel,
+    load_ksg_workbook,
     load_lor_excel,
     load_ops_excel,
     pick_default_department,
@@ -31,9 +31,18 @@ from export_reports import (
 from gui.ui_theme import short_month_label
 from ksg_analysis import (
     analyze_ksg,
+    build_department_comparison,
     build_month_comparison,
+    filter_ksg_by_period,
+    ksg_item_primary_df,
+    list_ksg_periods,
     load_reference,
     sort_ksg_files_chronologically,
+)
+from ksg_departments import (
+    filter_ksg_dataframe,
+    list_ksg_departments,
+    pick_default_ksg_department,
 )
 from lor_analysis import (
     analyze_lor,
@@ -67,10 +76,17 @@ _EMK: dict[str, Any] = {
     "as_of": None,
 }
 _KSG: dict[str, Any] = {
-    "files": [],  # [{name, path, df, results, label}]
+    "files": [],
     "active": 0,
     "reference": None,
     "reference_status": "",
+    "scope": "all",
+    "department": "",
+    "departments_selected": [],
+    "period": "all",
+    "source": "ksg",
+    "analysis": None,
+    "department_label": "",
 }
 _OPS: dict[str, Any] = {
     "path": None,
@@ -303,8 +319,8 @@ def _ksg_file_summary(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _ksg_analyze_payload(results: dict[str, Any]) -> dict[str, Any]:
-    return {
+def _ksg_analyze_payload(results: dict[str, Any], meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = {
         "total_patients": results.get("total_patients"),
         "total_sum": results.get("total_sum"),
         "avg_kz_total": results.get("avg_kz_total"),
@@ -316,6 +332,12 @@ def _ksg_analyze_payload(results: dict[str, Any]) -> dict[str, Any]:
         "high_money": _df_records(results.get("high_money"), limit=2000),
         "no_service": _df_records(results.get("no_service"), limit=2000),
         "kslp_issues": _df_records(results.get("kslp_issues"), limit=2000),
+        "policy_issues": _df_records(results.get("policy_issues"), limit=2000),
+        "policy_check_enabled": bool(results.get("policy_check_enabled")),
+        "policy_check_available": bool(results.get("policy_check_available")),
+        "total_policy_issues": results.get("total_policy_issues"),
+        "other_violations": _json_safe(results.get("other_violations")),
+        "by_department": _df_records(results.get("by_department"), limit=200),
         "age_dist": _json_safe(results.get("age_dist")),
         "age_sum": _json_safe(results.get("age_sum")),
         "age_kz": _json_safe(results.get("age_kz")),
@@ -323,6 +345,96 @@ def _ksg_analyze_payload(results: dict[str, Any]) -> dict[str, Any]:
         "thresholds": results.get("thresholds"),
         "kslp_settings": results.get("kslp_settings"),
     }
+    if meta:
+        payload.update(meta)
+    return payload
+
+
+def _parse_ksg_scope(params: dict[str, Any]) -> tuple[str, str, list[str]]:
+    scope = str(params.get("scope") or "single").strip().lower()
+    if scope not in ("single", "multi", "all"):
+        scope = "single"
+    department = str(params.get("department") or "").strip()
+    raw_deps = params.get("departments")
+    departments: list[str] = []
+    if isinstance(raw_deps, list):
+        departments = [str(d).strip() for d in raw_deps if str(d).strip()]
+    return scope, department, departments
+
+
+def _ksg_active_item() -> dict[str, Any]:
+    if not _KSG["files"]:
+        raise RuntimeError("Сначала загрузите файл КСГ")
+    idx = int(_KSG.get("active") or 0)
+    if idx < 0 or idx >= len(_KSG["files"]):
+        idx = 0
+    return _KSG["files"][idx]
+
+
+def _ksg_source_df(item: dict[str, Any], source: str) -> pd.DataFrame:
+    source = (source or "ksg").strip().lower()
+    if source == "other":
+        df = item.get("df_other")
+        if df is None or getattr(df, "empty", True):
+            raise ValueError("Лист «Др. услуги» отсутствует или пуст")
+        return df
+    df = item.get("df_ksg")
+    if df is None:
+        df = item.get("df")
+    if df is None:
+        raise RuntimeError("Нет данных КСГ")
+    return df
+
+
+def _run_ksg_analysis_for_item(
+    item: dict[str, Any],
+    *,
+    scope: str,
+    department: str,
+    departments: list[str],
+    period: str,
+    source: str,
+    cfg: dict[str, Any],
+    ref: dict[str, tuple[str, str]],
+) -> dict[str, Any]:
+    df_full = _ksg_source_df(item, source)
+    df_full, departments_in_scope = filter_ksg_dataframe(df_full, scope, department, departments)
+    if df_full.empty:
+        raise ValueError("Нет данных по выбранным фильтрам")
+    df_full = filter_ksg_by_period(df_full, period)
+    if df_full.empty:
+        raise ValueError("Нет данных за выбранный период")
+    all_depts = list(item.get("departments") or list_ksg_departments(_ksg_source_df(item, source)))
+    analyze_cfg = dict(cfg)
+    analyze_cfg["_ksg_departments"] = all_depts
+    results = analyze_ksg(df_full, ref, analyze_cfg)
+    department_label = format_department_scope_label(
+        scope,
+        department=department,
+        departments=departments_in_scope,
+        departments_total=len(all_depts),
+    )
+    period_label = "весь период"
+    if period and str(period).strip().lower() not in ("", "all"):
+        for p in item.get("periods") or []:
+            if isinstance(p, dict) and str(p.get("id")) == str(period):
+                period_label = str(p.get("label") or period)
+                break
+    meta = {
+        "department": department_label,
+        "scope": scope,
+        "departments": all_depts,
+        "departments_in_scope": departments_in_scope,
+        "departments_total": len(all_depts),
+        "period": period or "all",
+        "period_label": period_label,
+        "periods": item.get("periods") or [],
+        "source": source,
+        "has_other_services": bool(
+            item.get("df_other") is not None and not getattr(item.get("df_other"), "empty", True)
+        ),
+    }
+    return {"results": results, "meta": meta, "department_label": department_label}
 
 
 def ping(_params: dict[str, Any]) -> dict[str, Any]:
@@ -357,6 +469,8 @@ _CONFIG_SET_ALLOWED = frozenset(
         "long_op_hours",
         "kslp_operations_codes",
         "kslp_rules",
+        "ksg_kslp_profiles",
+        "ksg_department_profiles",
         "preferred_department",
         "known_departments",
         "github_repo",
@@ -397,6 +511,10 @@ def config_set(params: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"{key} must be an object")
         elif key == "kslp_rules" and not isinstance(value, list):
             raise ValueError("kslp_rules must be a list")
+        elif key == "ksg_kslp_profiles" and not isinstance(value, dict):
+            raise ValueError("ksg_kslp_profiles must be an object")
+        elif key == "ksg_department_profiles" and not isinstance(value, dict):
+            raise ValueError("ksg_department_profiles must be an object")
         elif key == "report_profiles" and not isinstance(value, dict):
             raise ValueError("report_profiles must be an object")
         else:
@@ -576,22 +694,34 @@ def ksg_load(params: dict[str, Any]) -> dict[str, Any]:
     path = _assert_excel_path(params.get("path"))
     cfg = load_config()
     profile = get_active_profile(cfg, "ksg")
-    loaded = load_ksg_excel(str(path), profile=profile, config=cfg)
-    df = loaded.dataframe
-    ref, status = _ensure_ksg_reference()
-    results = analyze_ksg(df, ref, cfg)
-    label = short_month_label(path.name, df)
+    loaded = load_ksg_workbook(str(path), profile=profile, config=cfg)
+    df_ksg = loaded.ksg.dataframe
+    df_other = loaded.other_services.dataframe if loaded.other_services else None
+    departments = list_ksg_departments(df_ksg)
+    periods = list_ksg_periods(df_ksg)
+    preferred = pick_default_ksg_department(
+        departments, df_ksg, cfg.get("preferred_department")
+    )
+    known = list(cfg.get("known_departments") or [])
+    for d in departments:
+        if d and d not in known:
+            known.append(d)
+    cfg["known_departments"] = known
+    label = short_month_label(path.name, df_ksg)
     item = {
         "name": path.name,
         "path": str(path),
-        "df": df,
-        "results": results,
+        "df_ksg": df_ksg,
+        "df_other": df_other,
+        "df": df_ksg,
+        "departments": departments,
+        "periods": periods,
         "label": label,
-        "mapping": loaded.mapping.to_dict() if loaded.mapping else None,
+        "mapping": loaded.ksg.mapping.to_dict() if loaded.ksg.mapping else None,
         "profile_id": profile.get("id"),
         "profile_name": profile.get("name"),
+        "results": None,
     }
-    # replace if same path
     files = [f for f in _KSG["files"] if f.get("path") != str(path)]
     files.append(item)
     _KSG["files"] = sort_ksg_files_chronologically(files)
@@ -599,16 +729,81 @@ def ksg_load(params: dict[str, Any]) -> dict[str, Any]:
         (i for i, f in enumerate(_KSG["files"]) if f.get("path") == str(path)),
         len(_KSG["files"]) - 1,
     )
+    _KSG["scope"] = "all"
+    _KSG["department"] = ""
+    _KSG["departments_selected"] = []
+    _KSG["period"] = periods[-1]["id"] if len(periods) == 1 else "all"
+    _KSG["source"] = "ksg"
     push_recent_file(cfg, "recent_ksg", str(path))
     save_config(cfg)
+    ref, status = _ensure_ksg_reference()
+    analyzed = _run_ksg_analysis_for_item(
+        item,
+        scope="all",
+        department="",
+        departments=[],
+        period=_KSG["period"],
+        source="ksg",
+        cfg=cfg,
+        ref=ref,
+    )
+    item["results"] = analyzed["results"]
+    _KSG["analysis"] = analyzed
     return {
         "files": [_ksg_file_summary(f) for f in _KSG["files"]],
         "active": _KSG["active"],
         "reference_status": status,
-        "analysis": _ksg_analyze_payload(results),
+        "analysis": _ksg_analyze_payload(analyzed["results"], analyzed["meta"]),
+        "departments": departments,
+        "preferred_department": preferred,
+        "periods": periods,
         "profile_id": profile.get("id"),
         "profile_name": profile.get("name"),
-        "mapping": loaded.mapping.to_dict() if loaded.mapping else None,
+        "mapping": loaded.ksg.mapping.to_dict() if loaded.ksg.mapping else None,
+        "has_other_services": df_other is not None and not df_other.empty,
+    }
+
+
+def ksg_analyze(params: dict[str, Any]) -> dict[str, Any]:
+    item = _ksg_active_item()
+    cfg = load_config()
+    ref, status = _ensure_ksg_reference()
+    scope, department, departments = _parse_ksg_scope(params)
+    if scope == "all":
+        scope = "all"
+    elif scope == "single" and not department:
+        department = pick_default_ksg_department(
+            list(item.get("departments") or []),
+            _ksg_source_df(item, str(params.get("source") or _KSG.get("source") or "ksg")),
+            cfg.get("preferred_department"),
+        ) or ""
+    period = str(params.get("period") or _KSG.get("period") or "all")
+    source = str(params.get("source") or _KSG.get("source") or "ksg").strip().lower()
+    analyzed = _run_ksg_analysis_for_item(
+        item,
+        scope=scope,
+        department=department,
+        departments=departments,
+        period=period,
+        source=source,
+        cfg=cfg,
+        ref=ref,
+    )
+    item["results"] = analyzed["results"]
+    _KSG["scope"] = scope
+    _KSG["department"] = department
+    _KSG["departments_selected"] = list(analyzed["meta"].get("departments_in_scope") or [])
+    _KSG["period"] = period
+    _KSG["source"] = source
+    _KSG["analysis"] = analyzed
+    _KSG["department_label"] = analyzed["department_label"]
+    return {
+        "analysis": _ksg_analyze_payload(analyzed["results"], analyzed["meta"]),
+        "reference_status": status,
+        "scope": scope,
+        "department": analyzed["department_label"],
+        "period": period,
+        "source": source,
     }
 
 
@@ -627,10 +822,34 @@ def ksg_set_active(params: dict[str, Any]) -> dict[str, Any]:
         raise IndexError("Неверный индекс файла КСГ")
     _KSG["active"] = idx
     item = _KSG["files"][idx]
+    analysis = _KSG.get("analysis")
+    if item.get("results") is None:
+        cfg = load_config()
+        ref, status = _ensure_ksg_reference()
+        analyzed = _run_ksg_analysis_for_item(
+            item,
+            scope=str(_KSG.get("scope") or "all"),
+            department=str(_KSG.get("department") or ""),
+            departments=list(_KSG.get("departments_selected") or []),
+            period=str(_KSG.get("period") or "all"),
+            source=str(_KSG.get("source") or "ksg"),
+            cfg=cfg,
+            ref=ref,
+        )
+        item["results"] = analyzed["results"]
+        analysis = analyzed
+        _KSG["analysis"] = analyzed
+    meta = analysis.get("meta") if isinstance(analysis, dict) else None
+    results = item.get("results") or {}
     return {
         "active": idx,
         "file": _ksg_file_summary(item),
-        "analysis": _ksg_analyze_payload(item["results"]),
+        "analysis": _ksg_analyze_payload(results, meta),
+        "departments": item.get("departments") or [],
+        "periods": item.get("periods") or [],
+        "has_other_services": bool(
+            item.get("df_other") is not None and not getattr(item.get("df_other"), "empty", True)
+        ),
     }
 
 
@@ -650,14 +869,32 @@ def ksg_reanalyze(_params: dict[str, Any]) -> dict[str, Any]:
     ref, status = _ensure_ksg_reference()
     cfg = load_config()
     for item in _KSG["files"]:
-        item["results"] = analyze_ksg(item["df"], ref, cfg)
-        item["label"] = short_month_label(item["name"], item["df"])
-    active = _KSG["files"][_KSG["active"]] if _KSG["files"] else None
+        analyzed = _run_ksg_analysis_for_item(
+            item,
+            scope=str(_KSG.get("scope") or "all"),
+            department=str(_KSG.get("department") or ""),
+            departments=list(_KSG.get("departments_selected") or []),
+            period=str(_KSG.get("period") or "all"),
+            source=str(_KSG.get("source") or "ksg"),
+            cfg=cfg,
+            ref=ref,
+        )
+        item["results"] = analyzed["results"]
+        item["label"] = short_month_label(item["name"], ksg_item_primary_df(item))
+    active_item = _ksg_active_item() if _KSG["files"] else None
+    if active_item is not None:
+        _KSG["analysis"] = {
+            "results": active_item.get("results"),
+            "meta": (_KSG.get("analysis") or {}).get("meta"),
+            "department_label": _KSG.get("department_label") or "",
+        }
+    active = active_item
+    meta = (_KSG.get("analysis") or {}).get("meta") if active else None
     return {
         "files": [_ksg_file_summary(f) for f in _KSG["files"]],
         "active": _KSG["active"],
         "reference_status": status,
-        "analysis": _ksg_analyze_payload(active["results"]) if active else None,
+        "analysis": _ksg_analyze_payload(active["results"], meta) if active and active.get("results") else None,
     }
 
 
@@ -671,16 +908,59 @@ def ksg_export(params: dict[str, Any]) -> dict[str, Any]:
     fmt = str(params.get("format") or "xlsx").lower()
     path = _assert_export_path(params.get("path"))
     cfg = load_config()
+    results = item.get("results")
+    if results is None:
+        raise RuntimeError("Сначала выполните анализ КСГ")
+    meta = (_KSG.get("analysis") or {}).get("meta") if idx == _KSG["active"] else None
     if fmt in ("txt", "text"):
         saved = export_ksg_txt(
-            path, item["results"], file_name=item["name"], settings=cfg
+            path,
+            results,
+            file_name=item["name"],
+            settings=cfg,
+            department=str((meta or {}).get("department") or _KSG.get("department_label") or ""),
+            period_label=str((meta or {}).get("period_label") or ""),
         )
     else:
-        saved = export_ksg_excel(path, item["results"], file_name=item["name"])
+        saved = export_ksg_excel(
+            path,
+            results,
+            file_name=item["name"],
+            department=str((meta or {}).get("department") or _KSG.get("department_label") or ""),
+            period_label=str((meta or {}).get("period_label") or ""),
+        )
     return {"path": saved, "format": "txt" if fmt in ("txt", "text") else "xlsx"}
 
 
 def ksg_compare(params: dict[str, Any]) -> dict[str, Any]:
+    mode = str(params.get("mode") or "months").strip().lower()
+    if mode == "departments":
+        item = _ksg_active_item()
+        cfg = load_config()
+        ref, _ = _ensure_ksg_reference()
+        departments = params.get("departments")
+        if not isinstance(departments, list) or not departments:
+            departments = list(item.get("departments") or [])
+        period = str(params.get("period") or _KSG.get("period") or "all")
+        source = str(params.get("source") or _KSG.get("source") or "ksg")
+        summary = build_department_comparison(
+            item,
+            departments=[str(d).strip() for d in departments if str(d).strip()],
+            period=period,
+            source=source,
+            reference=ref,
+            settings=cfg,
+        )
+        return {
+            "mode": "departments",
+            "labels": summary.get("labels"),
+            "departments": summary.get("departments"),
+            "total_patients": summary.get("total_patients"),
+            "total_sum": summary.get("total_sum"),
+            "avg_kz": summary.get("avg_kz"),
+            "kslp_issues": summary.get("kslp_issues"),
+        }
+
     indices = params.get("indices")
     if indices is None:
         selected = list(_KSG["files"])
@@ -691,6 +971,7 @@ def ksg_compare(params: dict[str, Any]) -> dict[str, Any]:
     summary = build_month_comparison(selected)
     sorted_files = summary.get("files") or selected
     return {
+        "mode": "months",
         "labels": [f.get("label") or f.get("name") for f in sorted_files],
         "names": summary.get("names"),
         "total_patients": summary.get("total_patients"),
@@ -867,6 +1148,7 @@ HANDLERS = {
     "emk.sections": emk_sections,
     "emk.violationsSummary": emk_violations_summary,
     "ksg.load": ksg_load,
+    "ksg.analyze": ksg_analyze,
     "ksg.list": ksg_list,
     "ksg.setActive": ksg_set_active,
     "ksg.remove": ksg_remove,

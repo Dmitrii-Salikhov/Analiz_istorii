@@ -5,6 +5,17 @@
   min-width: 0;
 }
 
+.bar-chart__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.bar-chart__header .bar-legend {
+  margin-left: auto;
+}
+
 .bar-legend {
   display: flex;
   flex-wrap: wrap;
