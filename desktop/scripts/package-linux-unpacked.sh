@@ -18,6 +18,18 @@ chmod +x "$DIR/AnalizIstorii" 2>/dev/null || true
 cp -f "$REPO/version.txt" "$DIR/version.txt"
 cp -f "$REPO/KSGoperacii.csv" "$DIR/KSGoperacii.csv"
 
+ICON_SRC="$DESKTOP/build/icon.png"
+if [[ ! -f "$ICON_SRC" ]]; then
+  python3 "$DESKTOP/scripts/make-icons.py"
+fi
+cp -f "$ICON_SRC" "$DIR/icon.png"
+
+PORTABLE="$DESKTOP/linux-portable"
+for f in start.sh AnalizIstorii.desktop install-shortcut.sh; do
+  cp -f "$PORTABLE/$f" "$DIR/$f"
+  chmod +x "$DIR/$f" 2>/dev/null || true
+done
+
 rm -f "$ZIP" "$SHA"
 (
   cd "$DIR"

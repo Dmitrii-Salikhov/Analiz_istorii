@@ -6,6 +6,15 @@ from updater import parse_version
 # Новые версии — в начале списка.
 CHANGELOG: list[dict] = [
     {
+        "version": "1.3.7",
+        "title": "Что нового в версии 1.3.7",
+        "items": [
+            "Linux: в zip — icon.png, start.sh (--no-sandbox), AnalizIstorii.desktop "
+            "и install-shortcut.sh для ярлыка на рабочем столе с иконкой.",
+            "Linux: запуск без sudo и без настройки chrome-sandbox.",
+        ],
+    },
+    {
         "version": "1.3.6",
         "title": "Что нового в версии 1.3.6",
         "items": [

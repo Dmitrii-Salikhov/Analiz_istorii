@@ -193,8 +193,10 @@ jobs:
             ### Linux (x86_64, portable folder)
             1. Скачайте `AnalizIstorii-linux.zip`
             2. Распакуйте в домашнюю папку (без установки и sudo)
-            3. Запустите `./AnalizIstorii` из распакованной папки
+            3. **Ярлык на рабочий стол:** `./install-shortcut.sh` (один раз)
+            4. Или запуск из папки: `./start.sh` / двойной щелчок по `AnalizIstorii.desktop`
 
+            В архиве: `icon.png`, `start.sh` (`--no-sandbox`), `install-shortcut.sh`.
             Сборка Linux выполнена на базе Debian bullseye (glibc 2.31+) для совместимости с **glibc 2.32+**
             (в т.ч. ALT SP Workstation 10.2, X11). Python устанавливать не нужно.
 

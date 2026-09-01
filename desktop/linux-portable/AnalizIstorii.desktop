@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Анализ работы отделения
+Comment=Анализ ЭМК, КСГ, операций
+Exec=./start.sh
+Path=.
+Icon=./icon.png
+Terminal=false
+Categories=Office;
+StartupNotify=true
