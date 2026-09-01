@@ -213,6 +213,7 @@ def load_excel_with_header(
     progress: Callable[[str, float], None] | None = None,
     max_scan_rows: int = 80,
     preferred_sheets: Sequence[str] | None = None,
+    strict_preferred_sheets: bool = False,
 ) -> ExcelLoadResult:
     """
     Ищет строку заголовков по ключевым словам на каждом листе,
@@ -234,7 +235,12 @@ def load_excel_with_header(
         raise ExcelParseError("В книге нет листов.")
     if preferred_sheets:
         ordered = [s for s in preferred_sheets if s in sheets]
-        ordered.extend(s for s in sheets if s not in ordered)
+        if strict_preferred_sheets:
+            if not ordered:
+                keys = ", ".join(f"«{k}»" for k in preferred_sheets)
+                raise HeaderNotFoundError(f"Не найден лист из списка: {keys}.")
+        else:
+            ordered.extend(s for s in sheets if s not in ordered)
         sheets = ordered
 
     # Expand fragments with alias synonyms for header search
@@ -461,6 +467,7 @@ def _load_typed_excel(
     kind_key: str,
     after_load: Callable[[ExcelLoadResult], ExcelLoadResult] | None = None,
     preferred_sheets: Sequence[str] | None = None,
+    strict_preferred_sheets: bool = False,
 ) -> ExcelLoadResult:
     prof = dict(profile) if profile else (
         get_active_profile(dict(config or {}), kind_key)
@@ -481,6 +488,7 @@ def _load_typed_excel(
             profile_name=str(prof.get("name") or ""),
             progress=progress,
             preferred_sheets=preferred_sheets,
+            strict_preferred_sheets=strict_preferred_sheets,
         )
         if after_load is not None:
             result = after_load(result)
@@ -549,6 +557,7 @@ def load_ksg_excel(
     config: Mapping[str, Any] | None = None,
     *,
     preferred_sheets: Sequence[str] | None = None,
+    strict_preferred_sheets: bool = False,
 ) -> ExcelLoadResult:
     from ksg_departments import normalize_ksg_departments
 
@@ -574,7 +583,11 @@ def load_ksg_excel(
         else deepcopy_profile(DEFAULT_KSG_PROFILE)
     )
 
-    def _load_with_profile(sheets: Sequence[str] | None) -> ExcelLoadResult:
+    def _load_with_profile(
+        sheets: Sequence[str] | None,
+        *,
+        strict: bool = False,
+    ) -> ExcelLoadResult:
         return _load_typed_excel(
             file_path,
             expected_kind="ksg",
@@ -585,14 +598,22 @@ def load_ksg_excel(
             kind_key="ksg",
             after_load=_require_dates,
             preferred_sheets=sheets,
+            strict_preferred_sheets=strict,
         )
 
     try:
-        return _load_with_profile(preferred_sheets)
+        return _load_with_profile(preferred_sheets, strict=strict_preferred_sheets)
     except ExcelParseError:
-        if preferred_sheets:
+        if preferred_sheets and not strict_preferred_sheets:
             return _load_with_profile(None)
         raise
+
+
+OTHER_SERVICE_SHEET_NAMES: tuple[str, ...] = (
+    "Др. услуги",
+    "Др услуги",
+    "Другие услуги",
+)
 
 
 def load_ksg_workbook(
@@ -610,15 +631,22 @@ def load_ksg_workbook(
     )
     other: ExcelLoadResult | None = None
     try:
-        other = load_ksg_excel(
-            file_path,
-            progress=progress,
-            profile=profile,
-            config=config,
-            preferred_sheets=("Др. услуги", "Др услуги", "Другие услуги"),
-        )
-    except ExcelParseError:
-        other = None
+        sheet_names = set(pd.ExcelFile(file_path).sheet_names)
+    except Exception:
+        sheet_names = set()
+    other_sheet_candidates = [name for name in OTHER_SERVICE_SHEET_NAMES if name in sheet_names]
+    if other_sheet_candidates:
+        try:
+            other = load_ksg_excel(
+                file_path,
+                progress=progress,
+                profile=profile,
+                config=config,
+                preferred_sheets=tuple(other_sheet_candidates),
+                strict_preferred_sheets=True,
+            )
+        except ExcelParseError:
+            other = None
     return KsgWorkbookLoadResult(ksg=ksg, other_services=other)
 
 

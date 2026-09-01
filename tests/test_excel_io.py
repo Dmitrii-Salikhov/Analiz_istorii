@@ -297,3 +297,21 @@ def test_detect_and_load_current_patients_without_ids(tmp_path):
     loaded = load_lor_excel(str(path))
     assert loaded.emk_variant == "current"
     assert len(loaded.dataframe) == 1
+
+
+def test_strict_preferred_sheets_missing_sheet(tmp_path):
+    from excel_io import HeaderNotFoundError
+
+    path = tmp_path / "one_sheet.xlsx"
+    pd.DataFrame({"A": [1], "B": [2]}).to_excel(path, sheet_name="Лист1", index=False)
+
+    with pytest.raises(HeaderNotFoundError) as exc:
+        load_excel_with_header(
+            str(path),
+            required_fragments=["A"],
+            required_columns=["A"],
+            preferred_sheets=("КСГ",),
+            strict_preferred_sheets=True,
+        )
+
+    assert "КСГ" in str(exc.value)
