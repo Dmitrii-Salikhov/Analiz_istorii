@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "desktop"
 MAIN_CJS = DESKTOP / "electron" / "main.cjs"
@@ -98,6 +100,18 @@ def test_oper_table_column_wider_than_service_reduction():
 
 def test_desktop_build_succeeds_and_bundle_contains_pdf_export(capsys):
     npm = _npm_bin()
+    vite_bin = DESKTOP / "node_modules" / ".bin" / "vite"
+    if not vite_bin.is_file():
+        ci = subprocess.run(
+            [npm, "ci"],
+            cwd=DESKTOP,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if ci.returncode != 0:
+            pytest.skip(f"npm ci unavailable in this environment: {ci.stderr.strip()}")
+
     proc = subprocess.run(
         [npm, "run", "build"],
         cwd=DESKTOP,
