@@ -332,22 +332,9 @@ ${sections.join('\n')}
 
 export type OpsPrintOutcome = 'printed' | 'cancelled';
 
-export function printOpsHtml(
-  html: string,
-  opts?: Pick<OpsPrintOptions, 'orientation' | 'duplex'>,
-): Promise<OpsPrintOutcome> {
-  const landscape = opts?.orientation === 'landscape';
-  const duplexMode = opts?.duplex || 'simplex';
-  const electronPrint = window.analiz?.printHtml;
-  if (electronPrint) {
-    return electronPrint({ html, landscape, duplexMode }).then((result) => {
-      if (result.cancelled) return 'cancelled';
-      if (!result.ok) {
-        throw new Error('Печать не выполнена');
-      }
-      return 'printed';
-    });
-  }
+const ELECTRON_PRINT_TIMEOUT_MS = 120_000;
+
+async function printOpsHtmlViaIframe(html: string): Promise<OpsPrintOutcome> {
   return new Promise((resolve, reject) => {
     const iframe = document.createElement('iframe');
     iframe.setAttribute('aria-hidden', 'true');
@@ -401,6 +388,40 @@ export function printOpsHtml(
       }
     }, 150);
   });
+}
+
+export async function printOpsHtml(
+  html: string,
+  opts?: Pick<OpsPrintOptions, 'orientation' | 'duplex'>,
+): Promise<OpsPrintOutcome> {
+  const landscape = opts?.orientation === 'landscape';
+  const duplexMode = opts?.duplex || 'simplex';
+  const electronPrint = window.analiz?.printHtml;
+  if (electronPrint) {
+    try {
+      const result = await Promise.race([
+        electronPrint({ html, landscape, duplexMode }),
+        new Promise<never>((_, reject) => {
+          window.setTimeout(
+            () => reject(new Error('Таймаут ожидания диалога печати')),
+            ELECTRON_PRINT_TIMEOUT_MS,
+          );
+        }),
+      ]);
+      if (result.cancelled) return 'cancelled';
+      if (!result.ok) {
+        throw new Error('Печать не выполнена');
+      }
+      return 'printed';
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/таймаут|timeout|не удалось подготовить/i.test(msg)) {
+        return printOpsHtmlViaIframe(html);
+      }
+      throw e;
+    }
+  }
+  return printOpsHtmlViaIframe(html);
 }
 
 export function printOpsReport(payload: OpsPrintPayload, opts: OpsPrintOptions): Promise<OpsPrintOutcome> {

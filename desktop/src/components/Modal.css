@@ -10,6 +10,13 @@
   backdrop-filter: blur(4px);
 }
 
+.modal-backdrop--obscured {
+  opacity: 0;
+  pointer-events: none;
+  background: transparent;
+  backdrop-filter: none;
+}
+
 .modal {
   width: min(560px, 100%);
   max-height: min(90vh, 900px);

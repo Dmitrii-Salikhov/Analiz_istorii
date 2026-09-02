@@ -5,17 +5,24 @@ export function Modal({
   title,
   hint,
   wide,
+  obscured,
   children,
   onClose,
 }: {
   title: string;
   hint?: string;
   wide?: boolean;
+  /** Скрыть затемнение, чтобы не перекрывать системный диалог печати */
+  obscured?: boolean;
   children: ReactNode;
   onClose: () => void;
 }) {
   return (
-    <div className="modal-backdrop" onClick={onClose} role="presentation">
+    <div
+      className={`modal-backdrop${obscured ? ' modal-backdrop--obscured' : ''}`}
+      onClick={onClose}
+      role="presentation"
+    >
       <div
         className={`modal${wide ? ' modal--wide' : ''}`}
         onClick={(e) => e.stopPropagation()}

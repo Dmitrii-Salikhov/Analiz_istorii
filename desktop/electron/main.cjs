@@ -195,41 +195,11 @@ function registerIpc() {
       printWin = null;
     };
 
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      /** @type {NodeJS.Timeout | null} */
-      let focusWatch = null;
-      let sawMainBlur = false;
-
-      const settle = (result) => {
-        if (settled) return;
-        settled = true;
-        if (focusWatch) clearTimeout(focusWatch);
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.removeListener('blur', onMainBlur);
-          mainWindow.removeListener('focus', onMainFocus);
-        }
-        cleanup();
-        resolve(result);
-      };
-
-      const onMainBlur = () => {
-        sawMainBlur = true;
-      };
-      const onMainFocus = () => {
-        if (!sawMainBlur) return;
-        focusWatch = setTimeout(() => {
-          settle({ ok: true });
-        }, 400);
-      };
-
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.once('blur', onMainBlur);
-        mainWindow.once('focus', onMainFocus);
-      }
-
+    try {
       printWin = new BrowserWindow({
         show: false,
+        parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+        modal: false,
         webPreferences: {
           sandbox: true,
           nodeIntegration: false,
@@ -237,56 +207,34 @@ function registerIpc() {
         },
       });
 
-      printWin.webContents.once('did-fail-load', () => {
-        if (settled) return;
-        settled = true;
-        if (focusWatch) clearTimeout(focusWatch);
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.removeListener('blur', onMainBlur);
-          mainWindow.removeListener('focus', onMainFocus);
-        }
-        cleanup();
-        reject(new Error('Не удалось подготовить печать'));
+      await printWin.loadFile(tmpPath);
+      // Скрытое окно на части платформ не показывает системный диалог печати.
+      if (!printWin.isDestroyed()) {
+        printWin.showInactive();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      if (!printWin || printWin.isDestroyed()) {
+        throw new Error('Не удалось подготовить печать');
+      }
+
+      await printWin.webContents.print({
+        silent: false,
+        printBackground: true,
+        landscape,
+        duplexMode,
       });
 
-      printWin.webContents.once('did-finish-load', () => {
-        printWin.webContents.print(
-          {
-            silent: false,
-            printBackground: true,
-            landscape,
-            duplexMode,
-          },
-          (success, failureReason) => {
-            if (success) {
-              settle({ ok: true });
-              return;
-            }
-            const reason = String(failureReason || '');
-            if (/cancel/i.test(reason)) {
-              settle({ ok: false, cancelled: true });
-              return;
-            }
-            if (settled) return;
-            settled = true;
-            if (focusWatch) clearTimeout(focusWatch);
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.removeListener('blur', onMainBlur);
-              mainWindow.removeListener('focus', onMainFocus);
-            }
-            cleanup();
-            reject(new Error(reason || 'Печать не выполнена'));
-          },
-        );
-      });
-
-      printWin.loadFile(tmpPath).catch(() => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(new Error('Не удалось подготовить печать'));
-      });
-    });
+      return { ok: true };
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      if (/cancel/i.test(reason)) {
+        return { ok: false, cancelled: true };
+      }
+      throw new Error(reason || 'Печать не выполнена');
+    } finally {
+      cleanup();
+    }
   });
 }
 

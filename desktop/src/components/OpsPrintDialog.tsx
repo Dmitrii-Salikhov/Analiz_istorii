@@ -57,7 +57,7 @@ export function OpsPrintDialog({
   }, [payload, opts, canPrint]);
 
   return (
-    <Modal title="Печать таблиц" wide onClose={onClose}>
+    <Modal title="Печать таблиц" wide obscured={busy} onClose={onClose}>
       <div className="ops-print-dialog">
         <div className="ops-print-dialog__settings">
           <fieldset className="ops-print-fieldset">
