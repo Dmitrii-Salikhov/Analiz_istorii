@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import { BarChart, type BarGroup, type BarItem } from './components/BarChart';
 import { DataTable } from './components/DataTable';
 import { ExportDialog } from './components/ExportDialog';
+import { OpsPrintDialog } from './components/OpsPrintDialog';
 import { SettingsDialog, type AppConfig } from './components/SettingsDialog';
 import {
   DEFAULT_COMPARE_CHARTS,
@@ -261,6 +262,7 @@ export default function App() {
   const [config, setConfig] = useState<AppConfig>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [opsPrintOpen, setOpsPrintOpen] = useState(false);
   const [violOpen, setViolOpen] = useState(false);
   const [violTypeOpen, setViolTypeOpen] = useState<string | null>(null);
   const [coverageListOpen, setCoverageListOpen] = useState<{
@@ -2401,6 +2403,15 @@ export default function App() {
               <button
                 className="btn"
                 type="button"
+                disabled={busy || !ops}
+                title="Распечатать таблицы длительных операций и операций без опер.стола"
+                onClick={() => setOpsPrintOpen(true)}
+              >
+                Печать таблиц
+              </button>
+              <button
+                className="btn"
+                type="button"
                 disabled={busy || !opsFile}
                 title="Пересчитать проверки с текущими настройками и отделением"
                 onClick={() => void reanalyzeOps()}
@@ -2595,6 +2606,23 @@ export default function App() {
           }
           onClose={() => setExportOpen(false)}
           onExport={doExport}
+        />
+      )}
+
+      {opsPrintOpen && ops && (
+        <OpsPrintDialog
+          payload={{
+            fileName: ops.file_name || opsFile || '—',
+            department: ops.department,
+            scope: ops.scope,
+            departmentsInScope: ops.departments_in_scope,
+            longOpHours: ops.long_op_hours,
+            longOps: ops.long_ops,
+            missingTable: ops.missing_table,
+          }}
+          onClose={() => setOpsPrintOpen(false)}
+          onPrinted={() => setStatus('Отправлено на печать')}
+          onError={(message) => setError(message)}
         />
       )}
 
