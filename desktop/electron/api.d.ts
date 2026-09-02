@@ -1,3 +1,16 @@
+export type OpsPrintDuplex = 'simplex' | 'longEdge' | 'shortEdge';
+
+export type AnalizPrintHtmlResult = {
+  ok: boolean;
+  cancelled?: boolean;
+};
+
+export type AnalizPrintHtmlOptions = {
+  html: string;
+  landscape?: boolean;
+  duplexMode?: OpsPrintDuplex;
+};
+
 export type AnalizApi = {
   rpc: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
   openExcelDialog: (opts?: {
@@ -19,6 +32,7 @@ export type AnalizApi = {
     recent_ops?: string[];
     date_format?: string;
   }) => Promise<{ ok: boolean }>;
+  printHtml?: (opts: AnalizPrintHtmlOptions) => Promise<AnalizPrintHtmlResult>;
   onMenuAction?: (
     callback: (payload: { action: string; payload?: Record<string, unknown> }) => void,
   ) => () => void;

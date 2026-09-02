@@ -1,11 +1,13 @@
 import { formatShortPersonName } from './clipboard';
 
 export type OpsPrintOrientation = 'portrait' | 'landscape';
+export type OpsPrintDuplex = 'simplex' | 'longEdge' | 'shortEdge';
 
 export type OpsPrintOptions = {
   printLong: boolean;
   printMissingTable: boolean;
   orientation: OpsPrintOrientation;
+  duplex: OpsPrintDuplex;
 };
 
 export type OpsPrintRow = Record<string, unknown>;
@@ -204,8 +206,14 @@ export function opsPrintPreviewCaption(
   const pages = estimateOpsPrintPages(payload, opts);
   const tables = (opts.printLong ? 1 : 0) + (opts.printMissingTable ? 1 : 0);
   const orient = opts.orientation === 'landscape' ? 'альбомная' : 'книжная';
+  const duplexLabel =
+    opts.duplex === 'longEdge'
+      ? ' · двусторонняя (длинный край)'
+      : opts.duplex === 'shortEdge'
+        ? ' · двусторонняя (короткий край)'
+        : '';
   const serviceWidth = opts.orientation === 'landscape' ? '~50%' : opts.printMissingTable && !opts.printLong ? '~45%' : '~38%';
-  return `Стр. 1${pages > 1 ? `–${pages}` : ''} · A4 ${orient} · ${tables} ${tables === 1 ? 'таблица' : 'таблицы'} · «Услуга» ${serviceWidth}`;
+  return `Стр. 1${pages > 1 ? `–${pages}` : ''} · A4 ${orient}${duplexLabel} · ${tables} ${tables === 1 ? 'таблица' : 'таблицы'} · «Услуга» ${serviceWidth}`;
 }
 
 export function buildOpsPrintHtml(payload: OpsPrintPayload, opts: OpsPrintOptions): string {
@@ -322,7 +330,24 @@ ${sections.join('\n')}
 </html>`;
 }
 
-export function printOpsHtml(html: string): Promise<void> {
+export type OpsPrintOutcome = 'printed' | 'cancelled';
+
+export function printOpsHtml(
+  html: string,
+  opts?: Pick<OpsPrintOptions, 'orientation' | 'duplex'>,
+): Promise<OpsPrintOutcome> {
+  const landscape = opts?.orientation === 'landscape';
+  const duplexMode = opts?.duplex || 'simplex';
+  const electronPrint = window.analiz?.printHtml;
+  if (electronPrint) {
+    return electronPrint({ html, landscape, duplexMode }).then((result) => {
+      if (result.cancelled) return 'cancelled';
+      if (!result.ok) {
+        throw new Error('Печать не выполнена');
+      }
+      return 'printed';
+    });
+  }
   return new Promise((resolve, reject) => {
     const iframe = document.createElement('iframe');
     iframe.setAttribute('aria-hidden', 'true');
@@ -335,15 +360,26 @@ export function printOpsHtml(html: string): Promise<void> {
       reject(new Error('Не удалось подготовить печать'));
       return;
     }
+    let done = false;
     const cleanup = () => {
       window.setTimeout(() => {
         if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
       }, 500);
     };
-    const onAfterPrint = () => {
+    const finish = (outcome: OpsPrintOutcome) => {
+      if (done) return;
+      done = true;
+      window.removeEventListener('afterprint', onAfterPrint);
+      window.removeEventListener('focus', onFocus);
+      win.removeEventListener('afterprint', onAfterPrint);
       cleanup();
-      resolve();
+      resolve(outcome);
     };
+    const onAfterPrint = () => finish('printed');
+    const onFocus = () => {
+      window.setTimeout(() => finish('printed'), 300);
+    };
+    window.addEventListener('afterprint', onAfterPrint, { once: true });
     win.addEventListener('afterprint', onAfterPrint, { once: true });
     doc.open();
     doc.write(html);
@@ -352,16 +388,22 @@ export function printOpsHtml(html: string): Promise<void> {
       try {
         win.focus();
         win.print();
+        window.addEventListener('focus', onFocus, { once: true });
       } catch (e) {
-        win.removeEventListener('afterprint', onAfterPrint);
-        cleanup();
+        if (!done) {
+          done = true;
+          window.removeEventListener('afterprint', onAfterPrint);
+          window.removeEventListener('focus', onFocus);
+          win.removeEventListener('afterprint', onAfterPrint);
+          cleanup();
+        }
         reject(e instanceof Error ? e : new Error(String(e)));
       }
     }, 150);
   });
 }
 
-export function printOpsReport(payload: OpsPrintPayload, opts: OpsPrintOptions): Promise<void> {
+export function printOpsReport(payload: OpsPrintPayload, opts: OpsPrintOptions): Promise<OpsPrintOutcome> {
   const html = buildOpsPrintHtml(payload, opts);
-  return printOpsHtml(html);
+  return printOpsHtml(html, opts);
 }

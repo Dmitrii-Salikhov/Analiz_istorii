@@ -5,6 +5,7 @@ import {
   opsPrintPreviewCaption,
   printOpsHtml,
   type OpsPrintOrientation,
+  type OpsPrintDuplex,
   type OpsPrintPayload,
 } from '../lib/printOpsReport';
 import { Modal } from './Modal';
@@ -24,11 +25,12 @@ export function OpsPrintDialog({
   const [printLong, setPrintLong] = useState(true);
   const [printMissingTable, setPrintMissingTable] = useState(true);
   const [orientation, setOrientation] = useState<OpsPrintOrientation>('portrait');
+  const [duplex, setDuplex] = useState<OpsPrintDuplex>('simplex');
   const [busy, setBusy] = useState(false);
 
   const opts = useMemo(
-    () => ({ printLong, printMissingTable, orientation }),
-    [printLong, printMissingTable, orientation],
+    () => ({ printLong, printMissingTable, orientation, duplex }),
+    [printLong, printMissingTable, orientation, duplex],
   );
 
   const canPrint = printLong || printMissingTable;
@@ -41,6 +43,13 @@ export function OpsPrintDialog({
     orientation === 'portrait'
       ? 'Книжная: компактнее, «Услуга» с переносами.'
       : 'Альбомная: шире, меньше переносов в «Услуге».';
+
+  const duplexHint =
+    duplex === 'simplex'
+      ? 'Односторонняя печать.'
+      : duplex === 'longEdge'
+        ? 'Двусторонняя: переворот по длинному краю (обычный режим для книжных листов).'
+        : 'Двусторонняя: переворот по короткому краю (удобно для альбомных листов).';
 
   const previewHtml = useMemo(() => {
     if (!canPrint) return '';
@@ -94,6 +103,38 @@ export function OpsPrintDialog({
             <p className="ops-print-hint">{orientationHint}</p>
           </fieldset>
 
+          <fieldset className="ops-print-fieldset">
+            <legend>Двусторонняя печать</legend>
+            <label className="ops-print-radio">
+              <input
+                type="radio"
+                name="ops-print-duplex"
+                checked={duplex === 'simplex'}
+                onChange={() => setDuplex('simplex')}
+              />
+              Односторонняя
+            </label>
+            <label className="ops-print-radio">
+              <input
+                type="radio"
+                name="ops-print-duplex"
+                checked={duplex === 'longEdge'}
+                onChange={() => setDuplex('longEdge')}
+              />
+              Обе стороны (длинный край)
+            </label>
+            <label className="ops-print-radio">
+              <input
+                type="radio"
+                name="ops-print-duplex"
+                checked={duplex === 'shortEdge'}
+                onChange={() => setDuplex('shortEdge')}
+              />
+              Обе стороны (короткий край)
+            </label>
+            <p className="ops-print-hint">{duplexHint}</p>
+          </fieldset>
+
           <p className="ops-print-hint">Формат A4. Минимум одна таблица должна быть выбрана.</p>
         </div>
 
@@ -135,8 +176,10 @@ export function OpsPrintDialog({
             void (async () => {
               setBusy(true);
               try {
-                await printOpsHtml(buildOpsPrintHtml(payload, opts));
-                onPrinted?.();
+                const outcome = await printOpsHtml(buildOpsPrintHtml(payload, opts), opts);
+                if (outcome === 'printed') {
+                  onPrinted?.();
+                }
                 onClose();
               } catch (e) {
                 onError?.(e instanceof Error ? e.message : String(e));

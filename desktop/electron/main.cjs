@@ -159,6 +159,135 @@ function registerIpc() {
     syncMenuState(state || {});
     return { ok: true };
   });
+
+  ipcMain.handle('print:html', async (_e, opts = {}) => {
+    const html = String(opts.html || '');
+    if (!html.trim()) {
+      throw new Error('Пустой документ для печати');
+    }
+    if (html.length > 8_000_000) {
+      throw new Error('Документ слишком большой для печати');
+    }
+    const landscape = !!opts.landscape;
+    const duplexMode =
+      opts.duplexMode === 'longEdge' || opts.duplexMode === 'shortEdge'
+        ? opts.duplexMode
+        : 'simplex';
+
+    const tmpPath = path.join(
+      app.getPath('temp'),
+      `analiz-print-${process.pid}-${Date.now()}.html`,
+    );
+    fs.writeFileSync(tmpPath, html, 'utf8');
+
+    /** @type {import('electron').BrowserWindow | null} */
+    let printWin = null;
+
+    const cleanup = () => {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {
+        // ignore
+      }
+      if (printWin && !printWin.isDestroyed()) {
+        printWin.destroy();
+      }
+      printWin = null;
+    };
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      /** @type {NodeJS.Timeout | null} */
+      let focusWatch = null;
+      let sawMainBlur = false;
+
+      const settle = (result) => {
+        if (settled) return;
+        settled = true;
+        if (focusWatch) clearTimeout(focusWatch);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.removeListener('blur', onMainBlur);
+          mainWindow.removeListener('focus', onMainFocus);
+        }
+        cleanup();
+        resolve(result);
+      };
+
+      const onMainBlur = () => {
+        sawMainBlur = true;
+      };
+      const onMainFocus = () => {
+        if (!sawMainBlur) return;
+        focusWatch = setTimeout(() => {
+          settle({ ok: true });
+        }, 400);
+      };
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.once('blur', onMainBlur);
+        mainWindow.once('focus', onMainFocus);
+      }
+
+      printWin = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          sandbox: true,
+          nodeIntegration: false,
+          contextIsolation: true,
+        },
+      });
+
+      printWin.webContents.once('did-fail-load', () => {
+        if (settled) return;
+        settled = true;
+        if (focusWatch) clearTimeout(focusWatch);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.removeListener('blur', onMainBlur);
+          mainWindow.removeListener('focus', onMainFocus);
+        }
+        cleanup();
+        reject(new Error('Не удалось подготовить печать'));
+      });
+
+      printWin.webContents.once('did-finish-load', () => {
+        printWin.webContents.print(
+          {
+            silent: false,
+            printBackground: true,
+            landscape,
+            duplexMode,
+          },
+          (success, failureReason) => {
+            if (success) {
+              settle({ ok: true });
+              return;
+            }
+            const reason = String(failureReason || '');
+            if (/cancel/i.test(reason)) {
+              settle({ ok: false, cancelled: true });
+              return;
+            }
+            if (settled) return;
+            settled = true;
+            if (focusWatch) clearTimeout(focusWatch);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.removeListener('blur', onMainBlur);
+              mainWindow.removeListener('focus', onMainFocus);
+            }
+            cleanup();
+            reject(new Error(reason || 'Печать не выполнена'));
+          },
+        );
+      });
+
+      printWin.loadFile(tmpPath).catch(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error('Не удалось подготовить печать'));
+      });
+    });
+  });
 }
 
 app.whenReady().then(async () => {

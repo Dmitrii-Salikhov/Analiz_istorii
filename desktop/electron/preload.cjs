@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('analiz', {
     }
   },
   syncMenuState: (state) => ipcRenderer.invoke('menu:sync', state || {}),
+  printHtml: (opts) => ipcRenderer.invoke('print:html', opts || {}),
   onMenuAction: (callback) => {
     const handler = (_event, payload) => {
       if (payload && typeof payload.action === 'string') {
