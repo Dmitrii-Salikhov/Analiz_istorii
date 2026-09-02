@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell, session } = require('electron');
+const { app, BrowserWindow, BrowserView, dialog, ipcMain, shell, session } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { PythonBridge } = require('./pythonBridge.cjs');
@@ -168,6 +168,10 @@ function registerIpc() {
     if (html.length > 8_000_000) {
       throw new Error('Документ слишком большой для печати');
     }
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      throw new Error('Главное окно недоступно');
+    }
+
     const landscape = !!opts.landscape;
     const duplexMode =
       opts.duplexMode === 'longEdge' || opts.duplexMode === 'shortEdge'
@@ -180,45 +184,37 @@ function registerIpc() {
     );
     fs.writeFileSync(tmpPath, html, 'utf8');
 
-    /** @type {import('electron').BrowserWindow | null} */
-    let printWin = null;
+    const view = new BrowserView({
+      webPreferences: {
+        sandbox: true,
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    });
 
     const cleanup = () => {
+      try {
+        if (!mainWindow.isDestroyed()) {
+          mainWindow.removeBrowserView(view);
+        }
+      } catch {
+        // ignore
+      }
       try {
         fs.unlinkSync(tmpPath);
       } catch {
         // ignore
       }
-      if (printWin && !printWin.isDestroyed()) {
-        printWin.destroy();
-      }
-      printWin = null;
     };
 
     try {
-      printWin = new BrowserWindow({
-        show: false,
-        parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
-        modal: false,
-        webPreferences: {
-          sandbox: true,
-          nodeIntegration: false,
-          contextIsolation: true,
-        },
-      });
+      mainWindow.addBrowserView(view);
+      // За пределами экрана, но окно «видимо» для системного диалога печати.
+      view.setBounds({ x: -4096, y: 0, width: 794, height: 1123 });
+      await view.webContents.loadFile(tmpPath);
+      await new Promise((resolve) => setTimeout(resolve, 150));
 
-      await printWin.loadFile(tmpPath);
-      // Скрытое окно на части платформ не показывает системный диалог печати.
-      if (!printWin.isDestroyed()) {
-        printWin.showInactive();
-      }
-      await new Promise((resolve) => setTimeout(resolve, 200));
-
-      if (!printWin || printWin.isDestroyed()) {
-        throw new Error('Не удалось подготовить печать');
-      }
-
-      await printWin.webContents.print({
+      await view.webContents.print({
         silent: false,
         printBackground: true,
         landscape,

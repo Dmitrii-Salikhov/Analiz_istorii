@@ -46,10 +46,10 @@ export function OpsPrintDialog({
 
   const duplexHint =
     duplex === 'simplex'
-      ? 'Односторонняя печать.'
+      ? 'Односторонняя — подтвердите в диалоге принтера.'
       : duplex === 'longEdge'
-        ? 'Двусторонняя: переворот по длинному краю (обычный режим для книжных листов).'
-        : 'Двусторонняя: переворот по короткому краю (удобно для альбомных листов).';
+        ? 'Двусторонняя (длинный край) — выберите «по длинному краю» в диалоге принтера.'
+        : 'Двусторонняя (короткий край) — выберите «по короткому краю» в диалоге принтера.';
 
   const previewHtml = useMemo(() => {
     if (!canPrint) return '';
@@ -57,7 +57,7 @@ export function OpsPrintDialog({
   }, [payload, opts, canPrint]);
 
   return (
-    <Modal title="Печать таблиц" wide obscured={busy} onClose={onClose}>
+    <Modal title="Печать таблиц" wide onClose={onClose}>
       <div className="ops-print-dialog">
         <div className="ops-print-dialog__settings">
           <fieldset className="ops-print-fieldset">

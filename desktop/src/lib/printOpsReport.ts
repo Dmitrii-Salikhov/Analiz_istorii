@@ -159,7 +159,6 @@ function buildTableSectionHtml(
   rows: OpsPrintRow[],
   columns: readonly (typeof LONG_COLUMNS)[number][] | readonly (typeof MISSING_COLUMNS)[number][],
   sectionClass: string,
-  pageBreakBefore: boolean,
 ): string {
   const head = columns
     .map(
@@ -178,7 +177,7 @@ function buildTableSectionHtml(
       : '';
   const empty = rows.length === 0 ? '<p class="empty-note">Нет данных</p>' : '';
   return `
-<section class="ops-section ${sectionClass}${pageBreakBefore ? ' ops-section--break' : ''}">
+<section class="ops-section ${sectionClass}">
   <h2 class="section-title">${escapeHtml(title)} — всего нарушений: ${count}</h2>
   <table class="ops-table">
     <thead><tr>${head}</tr></thead>
@@ -219,7 +218,6 @@ export function opsPrintPreviewCaption(
 export function buildOpsPrintHtml(payload: OpsPrintPayload, opts: OpsPrintOptions): string {
   const pageSize = opts.orientation === 'landscape' ? 'A4 landscape' : 'A4 portrait';
   const sections: string[] = [buildHeaderHtml(payload)];
-  let firstSection = true;
   if (opts.printLong) {
     sections.push(
       buildTableSectionHtml(
@@ -228,10 +226,8 @@ export function buildOpsPrintHtml(payload: OpsPrintPayload, opts: OpsPrintOption
         payload.longOps,
         columnsFor('long', opts.orientation),
         'ops-section--long',
-        !firstSection,
       ),
     );
-    firstSection = false;
   }
   if (opts.printMissingTable) {
     sections.push(
@@ -241,7 +237,6 @@ export function buildOpsPrintHtml(payload: OpsPrintPayload, opts: OpsPrintOption
         payload.missingTable,
         columnsFor('missing', opts.orientation),
         'ops-section--missing',
-        !firstSection,
       ),
     );
   }
@@ -284,16 +279,15 @@ export function buildOpsPrintHtml(payload: OpsPrintPayload, opts: OpsPrintOption
   .dept-list li { margin: 0 0 1px; }
   .ops-section {
     margin: 0 0 8px;
-    page-break-inside: avoid;
-  }
-  .ops-section--break {
-    page-break-before: always;
+    page-break-inside: auto;
   }
   .section-title {
     margin: 0 0 4px;
     font-size: 12pt;
     font-weight: 700;
     line-height: 1.1;
+    break-after: avoid;
+    page-break-after: avoid;
   }
   .ops-table {
     width: 100%;
@@ -301,6 +295,13 @@ export function buildOpsPrintHtml(payload: OpsPrintPayload, opts: OpsPrintOption
     table-layout: fixed;
     font-size: 12pt;
     line-height: 1.05;
+  }
+  .ops-table thead {
+    display: table-header-group;
+  }
+  .ops-table tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
   .ops-table th,
   .ops-table td {
@@ -332,13 +333,14 @@ ${sections.join('\n')}
 
 export type OpsPrintOutcome = 'printed' | 'cancelled';
 
-const ELECTRON_PRINT_TIMEOUT_MS = 120_000;
-
 async function printOpsHtmlViaIframe(html: string): Promise<OpsPrintOutcome> {
   return new Promise((resolve, reject) => {
     const iframe = document.createElement('iframe');
     iframe.setAttribute('aria-hidden', 'true');
-    iframe.style.cssText = 'position:fixed;width:0;height:0;border:0;opacity:0;pointer-events:none';
+    iframe.title = 'Печать операций';
+    // Нулевой размер блокирует диалог печати в Electron; держим лист за экраном.
+    iframe.style.cssText =
+      'position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;opacity:0;pointer-events:none';
     document.body.appendChild(iframe);
     const win = iframe.contentWindow;
     const doc = iframe.contentDocument;
@@ -357,15 +359,11 @@ async function printOpsHtmlViaIframe(html: string): Promise<OpsPrintOutcome> {
       if (done) return;
       done = true;
       window.removeEventListener('afterprint', onAfterPrint);
-      window.removeEventListener('focus', onFocus);
       win.removeEventListener('afterprint', onAfterPrint);
       cleanup();
       resolve(outcome);
     };
     const onAfterPrint = () => finish('printed');
-    const onFocus = () => {
-      window.setTimeout(() => finish('printed'), 300);
-    };
     window.addEventListener('afterprint', onAfterPrint, { once: true });
     win.addEventListener('afterprint', onAfterPrint, { once: true });
     doc.open();
@@ -375,52 +373,25 @@ async function printOpsHtmlViaIframe(html: string): Promise<OpsPrintOutcome> {
       try {
         win.focus();
         win.print();
-        window.addEventListener('focus', onFocus, { once: true });
       } catch (e) {
         if (!done) {
           done = true;
           window.removeEventListener('afterprint', onAfterPrint);
-          window.removeEventListener('focus', onFocus);
           win.removeEventListener('afterprint', onAfterPrint);
           cleanup();
         }
         reject(e instanceof Error ? e : new Error(String(e)));
       }
-    }, 150);
+    }, 200);
   });
 }
 
 export async function printOpsHtml(
   html: string,
-  opts?: Pick<OpsPrintOptions, 'orientation' | 'duplex'>,
+  _opts?: Pick<OpsPrintOptions, 'orientation' | 'duplex'>,
 ): Promise<OpsPrintOutcome> {
-  const landscape = opts?.orientation === 'landscape';
-  const duplexMode = opts?.duplex || 'simplex';
-  const electronPrint = window.analiz?.printHtml;
-  if (electronPrint) {
-    try {
-      const result = await Promise.race([
-        electronPrint({ html, landscape, duplexMode }),
-        new Promise<never>((_, reject) => {
-          window.setTimeout(
-            () => reject(new Error('Таймаут ожидания диалога печати')),
-            ELECTRON_PRINT_TIMEOUT_MS,
-          );
-        }),
-      ]);
-      if (result.cancelled) return 'cancelled';
-      if (!result.ok) {
-        throw new Error('Печать не выполнена');
-      }
-      return 'printed';
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (/таймаут|timeout|не удалось подготовить/i.test(msg)) {
-        return printOpsHtmlViaIframe(html);
-      }
-      throw e;
-    }
-  }
+  // Electron webContents.print() на скрытом окне завершается без диалога принтера.
+  // Надёжный путь — iframe + window.print() в главном renderer (как в v1.3.8).
   return printOpsHtmlViaIframe(html);
 }
 
