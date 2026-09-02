@@ -1,4 +1,4 @@
-const { app, BrowserWindow, BrowserView, dialog, ipcMain, shell, session } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, session } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { PythonBridge } = require('./pythonBridge.cjs');
@@ -24,8 +24,8 @@ if (!gotLock) {
 function applyCsp() {
   const isDev = !!process.env.VITE_DEV_SERVER_URL;
   const csp = isDev
-    ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:* ws://localhost:* http://localhost:*; object-src 'none'; base-uri 'self';"
-    : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'self';";
+    ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; frame-src 'self' blob: data: file:; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:* ws://localhost:* http://localhost:*; object-src 'none'; base-uri 'self';"
+    : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; frame-src 'self' blob: data: file:; connect-src 'self'; object-src 'none'; base-uri 'self';";
 
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const headers = { ...details.responseHeaders };
@@ -73,6 +73,80 @@ function createWindow() {
     bindApplicationMenu(mainWindow, bridge.projectRoot());
   } catch {
     bindApplicationMenu(mainWindow, '');
+  }
+}
+
+/** @type {Map<string, { buffer: Buffer, createdAt: number }>} */
+const pdfCache = new Map();
+const PDF_CACHE_TTL_MS = 30 * 60 * 1000;
+
+function purgePdfCache() {
+  const now = Date.now();
+  for (const [id, entry] of pdfCache.entries()) {
+    if (now - entry.createdAt > PDF_CACHE_TTL_MS) {
+      pdfCache.delete(id);
+    }
+  }
+}
+
+function storePdfBuffer(buffer) {
+  purgePdfCache();
+  const id = `pdf-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  pdfCache.set(id, { buffer, createdAt: Date.now() });
+  return id;
+}
+
+function takePdfBuffer(id) {
+  const entry = pdfCache.get(String(id || ''));
+  if (!entry) {
+    throw new Error('PDF не найден — обновите предпросмотр');
+  }
+  return entry.buffer;
+}
+
+async function renderHtmlToPdfBuffer(html, landscape) {
+  const htmlPath = path.join(
+    app.getPath('temp'),
+    `analiz-html-${process.pid}-${Date.now()}.html`,
+  );
+  fs.writeFileSync(htmlPath, html, 'utf8');
+
+  /** @type {import('electron').BrowserWindow | null} */
+  let renderWin = null;
+
+  try {
+    renderWin = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        sandbox: true,
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    });
+    await renderWin.loadFile(htmlPath);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const data = await renderWin.webContents.printToPDF({
+      printBackground: true,
+      landscape: !!landscape,
+      pageSize: 'A4',
+      margins: {
+        marginType: 'custom',
+        top: 0.35,
+        bottom: 0.45,
+        left: 0.35,
+        right: 0.35,
+      },
+    });
+    return Buffer.from(data);
+  } finally {
+    if (renderWin && !renderWin.isDestroyed()) {
+      renderWin.destroy();
+    }
+    try {
+      fs.unlinkSync(htmlPath);
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -160,77 +234,48 @@ function registerIpc() {
     return { ok: true };
   });
 
-  ipcMain.handle('print:html', async (_e, opts = {}) => {
+  ipcMain.handle('pdf:fromHtml', async (_e, opts = {}) => {
     const html = String(opts.html || '');
     if (!html.trim()) {
-      throw new Error('Пустой документ для печати');
+      throw new Error('Пустой документ для PDF');
     }
     if (html.length > 8_000_000) {
-      throw new Error('Документ слишком большой для печати');
+      throw new Error('Документ слишком большой для PDF');
     }
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      throw new Error('Главное окно недоступно');
-    }
-
     const landscape = !!opts.landscape;
-    const duplexMode =
-      opts.duplexMode === 'longEdge' || opts.duplexMode === 'shortEdge'
-        ? opts.duplexMode
-        : 'simplex';
-
-    const tmpPath = path.join(
-      app.getPath('temp'),
-      `analiz-print-${process.pid}-${Date.now()}.html`,
-    );
-    fs.writeFileSync(tmpPath, html, 'utf8');
-
-    const view = new BrowserView({
-      webPreferences: {
-        sandbox: true,
-        nodeIntegration: false,
-        contextIsolation: true,
-      },
-    });
-
-    const cleanup = () => {
-      try {
-        if (!mainWindow.isDestroyed()) {
-          mainWindow.removeBrowserView(view);
-        }
-      } catch {
-        // ignore
-      }
-      try {
-        fs.unlinkSync(tmpPath);
-      } catch {
-        // ignore
-      }
+    const buffer = await renderHtmlToPdfBuffer(html, landscape);
+    const id = storePdfBuffer(buffer);
+    return {
+      id,
+      byteLength: buffer.length,
     };
+  });
 
-    try {
-      mainWindow.addBrowserView(view);
-      // За пределами экрана, но окно «видимо» для системного диалога печати.
-      view.setBounds({ x: -4096, y: 0, width: 794, height: 1123 });
-      await view.webContents.loadFile(tmpPath);
-      await new Promise((resolve) => setTimeout(resolve, 150));
+  ipcMain.handle('pdf:release', async (_e, id) => {
+    if (id) pdfCache.delete(String(id));
+    return { ok: true };
+  });
 
-      await view.webContents.print({
-        silent: false,
-        printBackground: true,
-        landscape,
-        duplexMode,
-      });
-
-      return { ok: true };
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
-      if (/cancel/i.test(reason)) {
-        return { ok: false, cancelled: true };
+  ipcMain.handle('pdf:save', async (_e, opts = {}) => {
+    const buffer = takePdfBuffer(opts.id);
+    const res = await dialog.showSaveDialog(mainWindow, {
+      title: 'Сохранить PDF',
+      defaultPath: opts.defaultPath || 'Печать_операции.pdf',
+      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    });
+    if (res.canceled || !res.filePath) return null;
+    const target = approvePath(res.filePath);
+    fs.writeFileSync(target, buffer);
+    if (opts.openAfterSave) {
+      const openErr = await shell.openPath(target);
+      if (openErr) {
+        throw new Error(openErr);
       }
-      throw new Error(reason || 'Печать не выполнена');
-    } finally {
-      cleanup();
     }
+    if (opts.revealInFolder) {
+      shell.showItemInFolder(target);
+    }
+    return target;
   });
 }
 

@@ -32,6 +32,23 @@ def test_config_set_rejects_bad_github_repo(monkeypatch):
         handlers.config_set({"config": {"github_repo": "http://evil.example/x"}})
 
 
+def test_config_set_merges_ui_prefs_preserves_ops_pdf_path(monkeypatch):
+    monkeypatch.setattr(
+        handlers,
+        "load_config",
+        lambda: {"ui_prefs": {"main_tab": "ops", "ops_pdf_last_path": "/tmp/old.pdf"}},
+    )
+    saved = {}
+
+    def fake_save(cfg):
+        saved.update(cfg)
+
+    monkeypatch.setattr(handlers, "save_config", fake_save)
+    out = handlers.config_set({"config": {"ui_prefs": {"main_tab": "emk"}}})
+    assert out["config"]["ui_prefs"]["main_tab"] == "emk"
+    assert out["config"]["ui_prefs"]["ops_pdf_last_path"] == "/tmp/old.pdf"
+
+
 def test_assert_excel_path_rejects_non_excel(tmp_path):
     p = tmp_path / "notes.txt"
     p.write_text("x", encoding="utf-8")

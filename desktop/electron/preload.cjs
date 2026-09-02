@@ -18,7 +18,9 @@ contextBridge.exposeInMainWorld('analiz', {
     }
   },
   syncMenuState: (state) => ipcRenderer.invoke('menu:sync', state || {}),
-  printHtml: (opts) => ipcRenderer.invoke('print:html', opts || {}),
+  pdfFromHtml: (opts) => ipcRenderer.invoke('pdf:fromHtml', opts || {}),
+  pdfRelease: (id) => ipcRenderer.invoke('pdf:release', id),
+  pdfSave: (opts) => ipcRenderer.invoke('pdf:save', opts || {}),
   onMenuAction: (callback) => {
     const handler = (_event, payload) => {
       if (payload && typeof payload.action === 'string') {

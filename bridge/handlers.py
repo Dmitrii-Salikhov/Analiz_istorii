@@ -509,6 +509,14 @@ def config_set(params: dict[str, Any]) -> dict[str, Any]:
             value, dict
         ):
             raise ValueError(f"{key} must be an object")
+        elif key == "ui_prefs" and isinstance(value, dict):
+            base = cfg.get("ui_prefs") if isinstance(cfg.get("ui_prefs"), dict) else {}
+            merged = {**base, **value}
+            charts_base = base.get("compare_charts") if isinstance(base.get("compare_charts"), dict) else {}
+            charts_patch = value.get("compare_charts") if isinstance(value.get("compare_charts"), dict) else {}
+            if charts_patch:
+                merged["compare_charts"] = {**charts_base, **charts_patch}
+            cfg[key] = merged
         elif key == "kslp_rules" and not isinstance(value, list):
             raise ValueError("kslp_rules must be a list")
         elif key == "ksg_kslp_profiles" and not isinstance(value, dict):

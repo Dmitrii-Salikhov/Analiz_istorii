@@ -2404,10 +2404,10 @@ export default function App() {
                 className="btn"
                 type="button"
                 disabled={busy || !ops}
-                title="Распечатать таблицы длительных операций и операций без опер.стола"
+                title="Сформировать PDF таблиц и открыть для печати"
                 onClick={() => setOpsPrintOpen(true)}
               >
-                Печать таблиц
+                Печать таблиц в PDF
               </button>
               <button
                 className="btn"
@@ -2620,8 +2620,26 @@ export default function App() {
             longOps: ops.long_ops,
             missingTable: ops.missing_table,
           }}
+          lastPdfPath={config.ui_prefs?.ops_pdf_last_path}
           onClose={() => setOpsPrintOpen(false)}
-          onPrinted={() => setStatus('Отправлено на печать')}
+          onSaved={(path) => {
+            setStatus(`PDF сохранён, открыт и показан в папке: ${path}`);
+            void (async () => {
+              try {
+                const res = await rpc<{ config: AppConfig }>('config.set', {
+                  config: {
+                    ui_prefs: {
+                      ...(config.ui_prefs || {}),
+                      ops_pdf_last_path: path,
+                    },
+                  },
+                });
+                setConfig(res.config);
+              } catch {
+                // ignore persist errors
+              }
+            })();
+          }}
           onError={(message) => setError(message)}
         />
       )}

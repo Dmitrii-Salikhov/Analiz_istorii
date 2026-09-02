@@ -1,14 +1,18 @@
-export type OpsPrintDuplex = 'simplex' | 'longEdge' | 'shortEdge';
-
-export type AnalizPrintHtmlResult = {
-  ok: boolean;
-  cancelled?: boolean;
+export type AnalizPdfFromHtmlResult = {
+  id: string;
+  byteLength: number;
 };
 
-export type AnalizPrintHtmlOptions = {
+export type AnalizPdfFromHtmlOptions = {
   html: string;
   landscape?: boolean;
-  duplexMode?: OpsPrintDuplex;
+};
+
+export type AnalizPdfSaveOptions = {
+  id: string;
+  defaultPath?: string;
+  openAfterSave?: boolean;
+  revealInFolder?: boolean;
 };
 
 export type AnalizApi = {
@@ -32,7 +36,9 @@ export type AnalizApi = {
     recent_ops?: string[];
     date_format?: string;
   }) => Promise<{ ok: boolean }>;
-  printHtml?: (opts: AnalizPrintHtmlOptions) => Promise<AnalizPrintHtmlResult>;
+  pdfFromHtml?: (opts: AnalizPdfFromHtmlOptions) => Promise<AnalizPdfFromHtmlResult>;
+  pdfRelease?: (id: string) => Promise<{ ok: boolean }>;
+  pdfSave?: (opts: AnalizPdfSaveOptions) => Promise<string | null>;
   onMenuAction?: (
     callback: (payload: { action: string; payload?: Record<string, unknown> }) => void,
   ) => () => void;

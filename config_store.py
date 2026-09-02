@@ -101,6 +101,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ksg_compare_mode": "months",
         "ops_summary_mode": "all",
         "ops_selected_departments": [],
+        "ops_pdf_last_path": None,
     },
     "report_profiles": None,  # filled below via normalize — placeholder replaced
     "recent_emk": [],

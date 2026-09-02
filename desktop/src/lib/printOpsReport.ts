@@ -1,13 +1,11 @@
 import { formatShortPersonName } from './clipboard';
 
 export type OpsPrintOrientation = 'portrait' | 'landscape';
-export type OpsPrintDuplex = 'simplex' | 'longEdge' | 'shortEdge';
 
 export type OpsPrintOptions = {
   printLong: boolean;
   printMissingTable: boolean;
   orientation: OpsPrintOrientation;
-  duplex: OpsPrintDuplex;
 };
 
 export type OpsPrintRow = Record<string, unknown>;
@@ -26,9 +24,9 @@ const LONG_COLUMNS = [
   { key: 'КВС', label: 'КВС №', width: '9%' },
   { key: 'Пациент', label: 'Пациент', width: '11%', format: 'person' },
   { key: 'Хирург', label: 'Хирург', width: '11%', format: 'person' },
-  { key: 'Услуга', label: 'Услуга', width: '38%', format: 'service' },
+  { key: 'Услуга', label: 'Услуга', width: '34%', format: 'service' },
   { key: 'Длительность', label: 'Длительность', width: '10%' },
-  { key: 'Опер.стол', label: 'Опер стол', width: '7%' },
+  { key: 'Опер.стол', label: 'Опер стол', width: '11%' },
   { key: 'Отделение', label: 'Отделение', width: '14%', format: 'dept' },
 ] as const;
 
@@ -36,8 +34,8 @@ const MISSING_COLUMNS = [
   { key: 'КВС', label: 'КВС №', width: '10%' },
   { key: 'Пациент', label: 'Пациент', width: '12%', format: 'person' },
   { key: 'Хирург', label: 'Хирург', width: '12%', format: 'person' },
-  { key: 'Услуга', label: 'Услуга', width: '45%', format: 'service' },
-  { key: 'Опер.стол', label: 'Опер стол', width: '8%' },
+  { key: 'Услуга', label: 'Услуга', width: '41%', format: 'service' },
+  { key: 'Опер.стол', label: 'Опер стол', width: '12%' },
   { key: 'Отделение', label: 'Отделение', width: '13%', format: 'dept' },
 ] as const;
 
@@ -48,9 +46,9 @@ const LONG_COLUMNS_LANDSCAPE = [
   { key: 'КВС', label: 'КВС №', width: '8%' },
   { key: 'Пациент', label: 'Пациент', width: '10%', format: 'person' },
   { key: 'Хирург', label: 'Хирург', width: '10%', format: 'person' },
-  { key: 'Услуга', label: 'Услуга', width: '44%', format: 'service' },
+  { key: 'Услуга', label: 'Услуга', width: '40%', format: 'service' },
   { key: 'Длительность', label: 'Длительность', width: '9%' },
-  { key: 'Опер.стол', label: 'Опер стол', width: '7%' },
+  { key: 'Опер.стол', label: 'Опер стол', width: '11%' },
   { key: 'Отделение', label: 'Отделение', width: '12%', format: 'dept' },
 ] as const;
 
@@ -58,8 +56,8 @@ const MISSING_COLUMNS_LANDSCAPE = [
   { key: 'КВС', label: 'КВС №', width: '9%' },
   { key: 'Пациент', label: 'Пациент', width: '11%', format: 'person' },
   { key: 'Хирург', label: 'Хирург', width: '11%', format: 'person' },
-  { key: 'Услуга', label: 'Услуга', width: '50%', format: 'service' },
-  { key: 'Опер.стол', label: 'Опер стол', width: '8%' },
+  { key: 'Услуга', label: 'Услуга', width: '46%', format: 'service' },
+  { key: 'Опер.стол', label: 'Опер стол', width: '12%' },
   { key: 'Отделение', label: 'Отделение', width: '11%', format: 'dept' },
 ] as const;
 
@@ -205,14 +203,8 @@ export function opsPrintPreviewCaption(
   const pages = estimateOpsPrintPages(payload, opts);
   const tables = (opts.printLong ? 1 : 0) + (opts.printMissingTable ? 1 : 0);
   const orient = opts.orientation === 'landscape' ? 'альбомная' : 'книжная';
-  const duplexLabel =
-    opts.duplex === 'longEdge'
-      ? ' · двусторонняя (длинный край)'
-      : opts.duplex === 'shortEdge'
-        ? ' · двусторонняя (короткий край)'
-        : '';
-  const serviceWidth = opts.orientation === 'landscape' ? '~50%' : opts.printMissingTable && !opts.printLong ? '~45%' : '~38%';
-  return `Стр. 1${pages > 1 ? `–${pages}` : ''} · A4 ${orient}${duplexLabel} · ${tables} ${tables === 1 ? 'таблица' : 'таблицы'} · «Услуга» ${serviceWidth}`;
+  const serviceWidth = opts.orientation === 'landscape' ? '~46%' : opts.printMissingTable && !opts.printLong ? '~41%' : '~34%';
+  return `Стр. 1${pages > 1 ? `–${pages}` : ''} · A4 ${orient} · ${tables} ${tables === 1 ? 'таблица' : 'таблицы'} · «Услуга» ${serviceWidth}`;
 }
 
 export function buildOpsPrintHtml(payload: OpsPrintPayload, opts: OpsPrintOptions): string {
@@ -329,73 +321,4 @@ export function buildOpsPrintHtml(payload: OpsPrintPayload, opts: OpsPrintOption
 ${sections.join('\n')}
 </body>
 </html>`;
-}
-
-export type OpsPrintOutcome = 'printed' | 'cancelled';
-
-async function printOpsHtmlViaIframe(html: string): Promise<OpsPrintOutcome> {
-  return new Promise((resolve, reject) => {
-    const iframe = document.createElement('iframe');
-    iframe.setAttribute('aria-hidden', 'true');
-    iframe.title = 'Печать операций';
-    // Нулевой размер блокирует диалог печати в Electron; держим лист за экраном.
-    iframe.style.cssText =
-      'position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;opacity:0;pointer-events:none';
-    document.body.appendChild(iframe);
-    const win = iframe.contentWindow;
-    const doc = iframe.contentDocument;
-    if (!win || !doc) {
-      document.body.removeChild(iframe);
-      reject(new Error('Не удалось подготовить печать'));
-      return;
-    }
-    let done = false;
-    const cleanup = () => {
-      window.setTimeout(() => {
-        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-      }, 500);
-    };
-    const finish = (outcome: OpsPrintOutcome) => {
-      if (done) return;
-      done = true;
-      window.removeEventListener('afterprint', onAfterPrint);
-      win.removeEventListener('afterprint', onAfterPrint);
-      cleanup();
-      resolve(outcome);
-    };
-    const onAfterPrint = () => finish('printed');
-    window.addEventListener('afterprint', onAfterPrint, { once: true });
-    win.addEventListener('afterprint', onAfterPrint, { once: true });
-    doc.open();
-    doc.write(html);
-    doc.close();
-    window.setTimeout(() => {
-      try {
-        win.focus();
-        win.print();
-      } catch (e) {
-        if (!done) {
-          done = true;
-          window.removeEventListener('afterprint', onAfterPrint);
-          win.removeEventListener('afterprint', onAfterPrint);
-          cleanup();
-        }
-        reject(e instanceof Error ? e : new Error(String(e)));
-      }
-    }, 200);
-  });
-}
-
-export async function printOpsHtml(
-  html: string,
-  _opts?: Pick<OpsPrintOptions, 'orientation' | 'duplex'>,
-): Promise<OpsPrintOutcome> {
-  // Electron webContents.print() на скрытом окне завершается без диалога принтера.
-  // Надёжный путь — iframe + window.print() в главном renderer (как в v1.3.8).
-  return printOpsHtmlViaIframe(html);
-}
-
-export function printOpsReport(payload: OpsPrintPayload, opts: OpsPrintOptions): Promise<OpsPrintOutcome> {
-  const html = buildOpsPrintHtml(payload, opts);
-  return printOpsHtml(html, opts);
 }

@@ -82,6 +82,7 @@ export type AppConfig = {
     ops_scope_mode?: 'single' | 'summary';
     ops_summary_mode?: 'all' | 'multi';
     ops_selected_departments?: string[];
+    ops_pdf_last_path?: string;
     ksg_scope_mode?: 'single' | 'summary';
     ksg_summary_mode?: 'all' | 'multi';
     ksg_selected_departments?: string[];
